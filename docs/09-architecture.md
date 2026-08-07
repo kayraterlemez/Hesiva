@@ -351,6 +351,62 @@ A Transaction represents a financial movement associated with a Customer.
 
 A Reminder represents a future action associated with a Customer.
 
+The authoritative Version 1 model fields are:
+
+```text
+Customer
+- id
+- legacy_id (nullable)
+- registered_on (nullable)
+- full_name
+- phone (nullable)
+- address (nullable)
+- notes (nullable)
+- created_at
+- updated_at
+- archived_at (nullable)
+
+Animal
+- id
+- customer_id
+- ear_tag (nullable)
+- name (nullable)
+- species (nullable)
+- notes (nullable)
+- created_at
+- updated_at
+- archived_at (nullable)
+
+Transaction
+- id
+- customer_id
+- animal_id (nullable)
+- legacy_id (nullable)
+- transaction_date
+- transaction_time (nullable)
+- description
+- amount_kurus
+- note (nullable)
+- created_at
+- updated_at
+- voided_at (nullable)
+- void_reason (nullable)
+
+Reminder
+- id
+- customer_id
+- remind_on
+- note
+- created_at
+- updated_at
+- completed_at (nullable)
+- cancelled_at (nullable)
+```
+
+`registered_on` is business/history data and is distinct from `created_at`, which records when the Cari row itself was created.
+
+Customers and animals use nullable archive timestamps rather than Boolean archive flags. Reminders use completion/cancellation timestamps rather than a Boolean status so the application preserves when those events occurred.
+
 Version 1 intentionally does not contain:
 
 - TransactionItem entities

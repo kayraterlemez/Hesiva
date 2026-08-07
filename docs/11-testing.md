@@ -620,7 +620,9 @@ Customer tests should include:
 - Search customer
 - Customer with optional fields missing
 - Multiple customers with identical names
-- Customer creation date
+- Customer `registered_on` business date
+- Customer `created_at` metadata timestamp
+- Nullable `archived_at` behavior
 - Legacy identifier behavior
 
 A customer should not require a unique human name.
@@ -638,7 +640,7 @@ Archiving a customer must not delete:
 - Reminders
 - Historical information
 
-Tests should verify that archived customers are hidden or displayed according to UI rules while their history remains intact.
+Tests should verify that `archived_at IS NULL` represents an active customer, setting `archived_at` archives the customer without deleting history, and archived customers are hidden or displayed according to UI rules while their history remains intact.
 
 ---
 
@@ -649,7 +651,7 @@ Animal tests should include:
 - Create animal for customer
 - Retrieve customer's animals
 - Update animal
-- Archive animal
+- Archive animal using `archived_at`
 - Optional ear tag
 - Optional animal name
 - Transaction without animal
@@ -692,13 +694,34 @@ Reminder tests should include:
 - Reminder in the future
 - Reminder due today
 - Reminder in the past
-- Completed reminder
+- Completed reminder using `completed_at`
+- Cancelled reminder using `cancelled_at`
+- Active reminder with both timestamps NULL
 - Multiple reminders for one customer
 - Reminder retrieval during startup
 
-A completed reminder should not continue to appear as an active due reminder.
+A reminder is active only while both `completed_at` and `cancelled_at` are NULL. A completed or cancelled reminder should not continue to appear as an active due reminder.
 
 Date boundary behavior should be tested explicitly.
+
+---
+
+# Domain Model Schema Tests
+
+The initial ORM/migration milestone should explicitly verify the authoritative Version 1 field semantics.
+
+At minimum:
+
+- `Customer.registered_on` is nullable and independent from `created_at`.
+- `Customer.archived_at` is nullable.
+- `Animal.archived_at` is nullable.
+- `Transaction.transaction_time` is nullable so legacy `Data.Saat` can be preserved when valid.
+- `Transaction.amount_kurus` rejects zero and accepts positive and negative integers.
+- `Reminder.completed_at` and `Reminder.cancelled_at` are nullable.
+- Reminder completion/cancellation does not physically delete the reminder.
+- `legacy_id` is nullable for customers and transactions.
+
+These tests protect the schema from drifting back toward earlier Boolean archive/completion designs.
 
 ---
 

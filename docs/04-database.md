@@ -143,7 +143,7 @@ A customer may own zero or more animals, financial transactions, and reminders.
 | registered_on | Date / NULL | Business registration date when known |
 | created_at | DateTime | Cari record creation timestamp |
 | updated_at | DateTime | Last modification timestamp |
-| archived | Boolean | Archive flag |
+| archived_at | DateTime / NULL | When the customer was archived |
 
 ---
 
@@ -152,7 +152,7 @@ A customer may own zero or more animals, financial transactions, and reminders.
 - `full_name` is required.
 - Human names are not unique; two customers may have the same name.
 - `legacy_id` is normally NULL for customers created directly in Cari.
-- Customers are archived rather than physically deleted.
+- Customers are archived rather than physically deleted. `archived_at IS NULL` means active; a non-NULL value means archived and records when archiving occurred.
 - Archiving a customer does not delete animals, reminders, or transactions.
 - Customer balance is calculated from active transactions.
 - Last activity is calculated from the most recent non-voided transaction business date.
@@ -183,7 +183,7 @@ Cari Version 1 is not a medical record system.
 | notes | Text / NULL | Optional notes |
 | created_at | DateTime | Creation timestamp |
 | updated_at | DateTime | Last modification timestamp |
-| archived | Boolean | Archive flag |
+| archived_at | DateTime / NULL | When the animal was archived |
 
 ---
 
@@ -194,7 +194,7 @@ Cari Version 1 is not a medical record system.
 - Animal fields may remain optional unless future requirements explicitly change this.
 - A financial transaction may reference an animal.
 - A transaction's animal must belong to the same customer as the transaction.
-- Animals are archived rather than physically deleted when history references them.
+- Animals are archived rather than physically deleted when history references them. `archived_at IS NULL` means active.
 
 ---
 
@@ -343,9 +343,10 @@ The primary Version 1 use case is a payment reminder.
 | customer_id | Integer | Related customer foreign key |
 | remind_on | Date | Reminder date |
 | note | Text | Reminder description |
-| completed | Boolean | Completion state |
 | created_at | DateTime | Creation timestamp |
 | updated_at | DateTime | Last modification timestamp |
+| completed_at | DateTime / NULL | When the reminder was completed |
+| cancelled_at | DateTime / NULL | When the reminder was cancelled |
 
 ---
 
@@ -353,8 +354,10 @@ The primary Version 1 use case is a payment reminder.
 
 - Every reminder belongs to exactly one customer.
 - `remind_on` and `note` are required.
-- Completed reminders remain stored.
-- Completed reminders are excluded from the active due-reminder list.
+- Active reminders have both `completed_at IS NULL` and `cancelled_at IS NULL`.
+- Completed reminders remain stored and record their completion time in `completed_at`.
+- Cancelled reminders remain stored and record their cancellation time in `cancelled_at`.
+- Completed or cancelled reminders are excluded from the active due-reminder list.
 - Reminder processing does not require Internet access.
 
 ---

@@ -307,6 +307,12 @@ legacy_id = NULL
 
 Legacy IDs are reference metadata only.
 
+`Customer.registered_on` preserves the legacy customer business/registration date when available. It must not be replaced by the Cari `created_at` timestamp.
+
+`Transaction.transaction_time` preserves the legacy `Data.Saat` value when valid. The field remains nullable because time data may be absent or invalid in legacy records.
+
+Animal records are a Cari Version 1 feature and have no known direct Veresiye 5 source table, so Version 1 does not require `Animal.legacy_id`.
+
 ---
 
 # Financial History Preservation
