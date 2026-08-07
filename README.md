@@ -321,7 +321,7 @@ Daha sonra müşteri yönetimi ve diğer kullanıcı iş akışları sırayla ge
 
 Repository'yi klonlayın:
 
-    git clone <repository-url>
+    git clone https://github.com/kayraterlemez/Hesiva.git
     cd hesiva
 
 Sanal ortam oluşturun:
