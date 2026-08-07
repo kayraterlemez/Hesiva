@@ -3,16 +3,15 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-from cari.database.base import Base
 from cari.database.engine import configure_sqlite_engine
+from cari.models import model_metadata
 
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Future model modules must be imported before autogeneration so they register here.
-target_metadata = Base.metadata
+target_metadata = model_metadata
 
 
 def run_migrations_offline() -> None:
