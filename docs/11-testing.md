@@ -2,13 +2,13 @@
 
 ## Purpose
 
-This document defines the testing strategy for the Cari application.
+This document defines the testing strategy for the Hesiva application.
 
-Cari stores long-term customer and financial data.
+Hesiva stores long-term customer and financial data.
 
 A defect in a normal desktop application may be inconvenient.
 
-A defect in Cari may:
+A defect in Hesiva may:
 
 - Display an incorrect customer balance
 - Lose a financial transaction
@@ -75,7 +75,7 @@ Business behavior should remain stable.
 
 # Test Types
 
-Cari uses several levels of testing.
+Hesiva uses several levels of testing.
 
 ```text
 Unit Tests
@@ -142,7 +142,7 @@ SQLAlchemy
 Temporary SQLite Database
 ```
 
-Integration tests are especially important for Cari because many critical behaviors involve database state.
+Integration tests are especially important for Hesiva because many critical behaviors involve database state.
 
 Examples include:
 
@@ -253,7 +253,7 @@ Directories should not be created before they are useful.
 
 # Test Database
 
-Automated tests must never use the real Cari production database.
+Automated tests must never use the real Hesiva production database.
 
 Every database test must use a temporary database.
 
@@ -272,13 +272,13 @@ Delete temporary directory
 Tests must not depend on:
 
 ```text
-~/.local/share/cari/
+~/.local/share/hesiva/
 ```
 
 or:
 
 ```text
-%LOCALAPPDATA%\Cari\
+%LOCALAPPDATA%\Hesiva\
 ```
 
 Temporary paths should be supplied explicitly.
@@ -934,7 +934,7 @@ For automated fixtures, the source file may be hashed or inspected before and af
 
 # Duplicate Import
 
-Version 1 legacy migration is intended for an empty Cari business database.
+Version 1 legacy migration is intended for an empty Hesiva business database.
 
 Tests should verify that:
 
@@ -1315,7 +1315,7 @@ Do not over-test exact log wording unless the wording itself is important.
 
 # Performance Testing
 
-Cari does not require enterprise-scale performance benchmarking.
+Hesiva does not require enterprise-scale performance benchmarking.
 
 However, representative datasets should occasionally be tested.
 
@@ -1587,7 +1587,7 @@ Good uses may include:
 
 Avoid mocking the database in tests whose purpose is to verify database behavior.
 
-SQLite integration is a core part of Cari and should be tested directly.
+SQLite integration is a core part of Hesiva and should be tested directly.
 
 ---
 
@@ -1753,14 +1753,14 @@ The exact checklist should evolve with the application.
 
 # Legacy Migration Acceptance Test
 
-Before using Cari with the real business database, perform a dedicated migration rehearsal.
+Before using Hesiva with the real business database, perform a dedicated migration rehearsal.
 
 The recommended process is:
 
 ```text
 Copy legacy backup
 ↓
-Import into test Cari database
+Import into test Hesiva database
 ↓
 Do not modify original legacy backup
 ↓
@@ -1912,7 +1912,7 @@ Do not remove a test simply because it becomes inconvenient.
 
 # V1 Minimum Test Areas
 
-Before Cari Version 1.0 is considered stable, automated tests should cover at minimum:
+Before Hesiva Version 1.0 is considered stable, automated tests should cover at minimum:
 
 - Customer creation
 - Customer modification
@@ -1965,7 +1965,7 @@ Data-integrity defects block release.
 
 # Summary
 
-Cari testing follows one primary principle:
+Hesiva testing follows one primary principle:
 
 > The software must prove that it preserves financial and customer data correctly.
 
@@ -2007,4 +2007,4 @@ A financial feature is not considered complete until its important behavior is c
 
 The purpose of the test suite is not to make development slower.
 
-Its purpose is to allow Cari to evolve without silently breaking the business history it exists to protect.
+Its purpose is to allow Hesiva to evolve without silently breaking the business history it exists to protect.

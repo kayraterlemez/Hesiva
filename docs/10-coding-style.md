@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document defines the coding conventions and development rules for the Cari application.
+This document defines the coding conventions and development rules for the Hesiva application.
 
 Its purpose is not to enforce personal formatting preferences.
 
@@ -23,7 +23,7 @@ The architecture defined in `09-architecture.md` takes priority over stylistic c
 
 # General Philosophy
 
-Cari is a long-lived desktop business application.
+Hesiva is a long-lived desktop business application.
 
 Code should be optimized primarily for:
 
@@ -155,7 +155,7 @@ Imports should be grouped in this order:
 
 1. Python standard library
 2. Third-party libraries
-3. Cari application imports
+3. Hesiva application imports
 
 Example:
 
@@ -166,8 +166,8 @@ from pathlib import Path
 from PySide6.QtWidgets import QWidget
 from sqlalchemy.orm import Session
 
-from cari.models.customer import Customer
-from cari.services.customer_service import CustomerService
+from hesiva.models.customer import Customer
+from hesiva.services.customer_service import CustomerService
 ```
 
 Wildcard imports are forbidden.
@@ -877,7 +877,7 @@ Explicit dependencies make behavior easier to understand and test.
 
 # Dependency Injection
 
-Cari uses simple constructor-based dependency injection.
+Hesiva uses simple constructor-based dependency injection.
 
 A dependency injection framework is not required.
 
@@ -963,7 +963,7 @@ Terminology should remain consistent throughout the application.
 For example, do not randomly alternate between:
 
 ```text
-Cari
+Hesiva
 Müşteri
 Firma
 Hesap Sahibi
@@ -1119,7 +1119,7 @@ Do not hard-code user-specific absolute paths.
 Incorrect:
 
 ```python
-Path("/home/kayra/cari/data.db")
+Path("/home/kayra/hesiva/data.db")
 ```
 
 Application directories must be resolved using the project's platform-aware path utilities.
@@ -1320,7 +1320,7 @@ Code should not assume:
 
 # Resource Usage
 
-Cari targets older hardware.
+Hesiva targets older hardware.
 
 Avoid unnecessarily heavy background processes.
 
@@ -1493,7 +1493,7 @@ If any answer reveals uncertainty about data integrity, the change should not be
 
 # Summary
 
-Cari code should be:
+Hesiva code should be:
 
 ```text
 Simple
@@ -1535,4 +1535,4 @@ The most important rule is:
 
 > Code should make the application's behavior easier to understand, not harder.
 
-Cari is expected to store business data for many years. Reliability and clarity therefore have greater value than clever implementation techniques.
+Hesiva is expected to store business data for many years. Reliability and clarity therefore have greater value than clever implementation techniques.

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document defines the logical database design of the Cari application.
+This document defines the logical database design of the Hesiva application.
 
 The database is designed for a single-user, offline-first desktop application that must preserve customer and financial history reliably for many years.
 
@@ -104,7 +104,7 @@ They exist for:
 - Duplicate migration protection
 - Comparison with the legacy application
 
-They are never used as the primary identity system of Cari.
+They are never used as the primary identity system of Hesiva.
 
 ---
 
@@ -122,7 +122,7 @@ Cascade deletion must never accidentally remove financial history.
 
 ## Purpose
 
-Represents a customer whose account is tracked by Cari.
+Represents a customer whose account is tracked by Hesiva.
 
 Customers are the center of the application.
 
@@ -141,7 +141,7 @@ A customer may own zero or more animals, financial transactions, and reminders.
 | address | Text / NULL | Address |
 | notes | Text / NULL | Additional notes |
 | registered_on | Date / NULL | Business registration date when known |
-| created_at | DateTime | Cari record creation timestamp |
+| created_at | DateTime | Hesiva record creation timestamp |
 | updated_at | DateTime | Last modification timestamp |
 | archived_at | DateTime / NULL | When the customer was archived |
 
@@ -151,7 +151,7 @@ A customer may own zero or more animals, financial transactions, and reminders.
 
 - `full_name` is required.
 - Human names are not unique; two customers may have the same name.
-- `legacy_id` is normally NULL for customers created directly in Cari.
+- `legacy_id` is normally NULL for customers created directly in Hesiva.
 - Customers are archived rather than physically deleted. `archived_at IS NULL` means active; a non-NULL value means archived and records when archiving occurred.
 - Archiving a customer does not delete animals, reminders, or transactions.
 - Customer balance is calculated from active transactions.
@@ -167,7 +167,7 @@ Represents an optional animal belonging to a customer.
 
 Animals exist to help identify which animal a financial movement concerned.
 
-Cari Version 1 is not a medical record system.
+Hesiva Version 1 is not a medical record system.
 
 ---
 
@@ -230,7 +230,7 @@ with optional animal and note information.
 | description | Text | Free-text description |
 | amount_kurus | Integer | Signed non-zero monetary movement in kuruş |
 | note | Text / NULL | Optional note |
-| created_at | DateTime | Cari record creation timestamp |
+| created_at | DateTime | Hesiva record creation timestamp |
 | updated_at | DateTime | Last technical metadata modification timestamp |
 | voided_at | DateTime / NULL | When the movement was voided |
 | void_reason | Text / NULL | Optional void reason |

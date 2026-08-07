@@ -1,5 +1,0 @@
-from sqlalchemy.orm import DeclarativeBase
-
-
-class Base(DeclarativeBase):
-    """Authoritative declarative base for Cari ORM models."""

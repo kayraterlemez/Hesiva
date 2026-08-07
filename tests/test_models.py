@@ -7,9 +7,9 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from cari.database.base import Base
-from cari.database.engine import create_sqlite_engine
-from cari.models import Animal, Customer, Reminder, Transaction
+from hesiva.database.base import Base
+from hesiva.database.engine import create_sqlite_engine
+from hesiva.models import Animal, Customer, Reminder, Transaction
 
 EXPECTED_COLUMNS = {
     "animals": {

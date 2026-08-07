@@ -6,16 +6,16 @@ import pytest
 from sqlalchemy import Engine, event, func, select
 from sqlalchemy.orm import Session
 
-from cari.database.base import Base
-from cari.database.engine import create_sqlite_engine
-from cari.models import Animal, Customer, Reminder, Transaction
-from cari.repositories import (
+from hesiva.database.base import Base
+from hesiva.database.engine import create_sqlite_engine
+from hesiva.models import Animal, Customer, Reminder, Transaction
+from hesiva.repositories import (
     AnimalRepository,
     CustomerRepository,
     ReminderRepository,
     TransactionRepository,
 )
-from cari.services import (
+from hesiva.services import (
     AnimalNotFoundError,
     AnimalService,
     CustomerNotFoundError,

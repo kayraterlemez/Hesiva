@@ -8,7 +8,7 @@ from sqlalchemy import inspect
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import IntegrityError
 
-from cari.database.engine import create_sqlite_engine
+from hesiva.database.engine import create_sqlite_engine
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BUSINESS_TABLES = {"animals", "customers", "reminders", "transactions"}
@@ -38,7 +38,7 @@ def test_alembic_environment_uses_src_layout_and_temporary_database(tmp_path: Pa
     alembic_config = Config(PROJECT_ROOT / "alembic.ini")
     script_directory = ScriptDirectory.from_config(alembic_config)
 
-    assert Path(script_directory.dir) == PROJECT_ROOT / "src" / "cari" / "database" / "migrations"
+    assert Path(script_directory.dir) == PROJECT_ROOT / "src" / "hesiva" / "database" / "migrations"
     assert alembic_config.get_main_option("sqlalchemy.url") == "sqlite://"
 
     database_path = tmp_path / "foundation.db"

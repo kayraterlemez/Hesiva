@@ -2,9 +2,9 @@
 
 ## Purpose
 
-The import system migrates the existing Veresiye 5 customer and financial history into Cari.
+The import system migrates the existing Veresiye 5 customer and financial history into Hesiva.
 
-This is a critical Version 1 requirement because Cari cannot safely replace the legacy application if years of account history disappear during transition.
+This is a critical Version 1 requirement because Hesiva cannot safely replace the legacy application if years of account history disappear during transition.
 
 The importer must preserve business history while keeping the original legacy source unchanged.
 
@@ -47,7 +47,7 @@ Firma
 Setting
 ```
 
-For Cari migration, the important Version 1 business tables are:
+For Hesiva migration, the important Version 1 business tables are:
 
 ```text
 CariKart → customers
@@ -62,7 +62,7 @@ The importer must validate actual table/column structure instead of trusting the
 
 # Source Protection
 
-The original `.exa` and `.edb` source files are immutable from Cari's point of view.
+The original `.exa` and `.edb` source files are immutable from Hesiva's point of view.
 
 The importer shall:
 
@@ -78,15 +78,15 @@ The original legacy backup remains available for independent recovery/comparison
 
 # Version 1 Migration Model
 
-Version 1 migration is intended for a new/empty Cari business database.
+Version 1 migration is intended for a new/empty Hesiva business database.
 
 This is deliberate.
 
-Merging a complete historical Veresiye 5 database into an already active Cari database introduces complex duplicate and conflict rules that are unnecessary for the initial replacement project.
+Merging a complete historical Veresiye 5 database into an already active Hesiva database introduces complex duplicate and conflict rules that are unnecessary for the initial replacement project.
 
 Therefore:
 
-- Initial migration into an empty Cari business database is supported.
+- Initial migration into an empty Hesiva business database is supported.
 - Re-running the same complete migration into a database that already contains imported/active business data is blocked.
 - General merge/import into a non-empty production database is outside Version 1.
 
@@ -167,7 +167,7 @@ Version 1 mapping should preserve useful business information without reproducin
 
 Recommended mapping:
 
-| Veresiye 5 | Cari |
+| Veresiye 5 | Hesiva |
 | --- | --- |
 | `ID` | `Customer.legacy_id` |
 | `Unvan` | `Customer.full_name` |
@@ -212,7 +212,7 @@ CariKartID
 
 Recommended mapping:
 
-| Veresiye 5 | Cari |
+| Veresiye 5 | Hesiva |
 | --- | --- |
 | `ID` | `Transaction.legacy_id` |
 | `CariKartID` | Current `customer_id` through legacy-ID mapping |
@@ -252,7 +252,7 @@ Unexpected rows must never be silently converted using a guessed rule.
 
 # Customer Relationship Mapping
 
-New Cari primary keys do not need to match legacy primary keys.
+New Hesiva primary keys do not need to match legacy primary keys.
 
 The importer builds an explicit mapping:
 
@@ -268,7 +268,7 @@ Example:
 
 ```text
 Legacy customer ID: 42
-New Cari customer ID: 107
+New Hesiva customer ID: 107
 ```
 
 A legacy transaction containing:
@@ -299,7 +299,7 @@ It is used for:
 - Reconciliation
 - Duplicate migration detection
 
-New records created directly in Cari normally have:
+New records created directly in Hesiva normally have:
 
 ```text
 legacy_id = NULL
@@ -307,11 +307,11 @@ legacy_id = NULL
 
 Legacy IDs are reference metadata only.
 
-`Customer.registered_on` preserves the legacy customer business/registration date when available. It must not be replaced by the Cari `created_at` timestamp.
+`Customer.registered_on` preserves the legacy customer business/registration date when available. It must not be replaced by the Hesiva `created_at` timestamp.
 
 `Transaction.transaction_time` preserves the legacy `Data.Saat` value when valid. The field remains nullable because time data may be absent or invalid in legacy records.
 
-Animal records are a Cari Version 1 feature and have no known direct Veresiye 5 source table, so Version 1 does not require `Animal.legacy_id`.
+Animal records are a Hesiva Version 1 feature and have no known direct Veresiye 5 source table, so Version 1 does not require `Animal.legacy_id`.
 
 ---
 
@@ -339,7 +339,7 @@ Legacy customer `Bakiye` is not copied as the current balance.
 After movements are imported:
 
 ```text
-Cari balance = SUM(active imported amount_kurus)
+Hesiva balance = SUM(active imported amount_kurus)
 ```
 
 Legacy `Borc`, `Alacak`, and `Bakiye` summary fields may then be compared with the new calculated values.
@@ -407,7 +407,7 @@ Long operations may use chunked implementation internally only if the same all-o
 
 # Import Report
 
-After analysis and migration, Cari should produce a clear report containing:
+After analysis and migration, Hesiva should produce a clear report containing:
 
 - Source filename
 - Source fingerprint/checksum when practical
@@ -419,7 +419,7 @@ After analysis and migration, Cari should produce a clear report containing:
 - Warning count
 - Error count
 - Reconciliation result
-- Cari/database version
+- Hesiva/database version
 
 The normal report should avoid unnecessary customer personal data.
 
@@ -458,12 +458,12 @@ The UI must never allow the user to assume migration completed before final reco
 Before production transition:
 
 1. Make a copy of the legacy backup.
-2. Import into a test/new Cari database.
+2. Import into a test/new Hesiva database.
 3. Compare aggregate counts and totals.
 4. Compare representative customers side by side.
 5. Inspect old and recent transaction history.
 6. Test generated account statements.
-7. Create and restore a Cari backup.
+7. Create and restore a Hesiva backup.
 8. Only then perform the production migration.
 
 The original legacy program/data should remain available read-only during the transition period.

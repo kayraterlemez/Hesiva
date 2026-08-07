@@ -2,9 +2,9 @@
 
 ## Purpose
 
-The security model protects Cari business data from unauthorized application access, accidental disclosure, corruption, and unsafe implementation practices.
+The security model protects Hesiva business data from unauthorized application access, accidental disclosure, corruption, and unsafe implementation practices.
 
-Cari is a local, offline-first desktop application. It is not designed to expose customer data to the Internet.
+Hesiva is a local, offline-first desktop application. It is not designed to expose customer data to the Internet.
 
 Security must remain understandable and must not create unnecessary risk to data recovery.
 
@@ -12,7 +12,7 @@ Security must remain understandable and must not create unnecessary risk to data
 
 # Security Philosophy
 
-Cari follows these principles:
+Hesiva follows these principles:
 
 - Local-first
 - Offline-first
@@ -58,11 +58,11 @@ The original password must not be recoverable.
 
 The application password is application-level access control.
 
-It prevents normal access through the Cari interface without authentication.
+It prevents normal access through the Hesiva interface without authentication.
 
 It does **not** encrypt the SQLite database.
 
-A person who already has sufficient operating-system/filesystem access may be able to read the database outside Cari.
+A person who already has sufficient operating-system/filesystem access may be able to read the database outside Hesiva.
 
 The application must not imply otherwise.
 
@@ -78,7 +78,7 @@ Files should use restrictive permissions where practical.
 
 Users should also protect the operating-system account with an appropriate password.
 
-Physical theft and full compromise of the operating-system account cannot be solved by the Cari login screen alone.
+Physical theft and full compromise of the operating-system account cannot be solved by the Hesiva login screen alone.
 
 ---
 
@@ -245,7 +245,7 @@ Legacy sources must be opened read-only.
 
 The importer must never modify the original `.exa` or `.edb` source.
 
-Version 1 legacy migration is intended for an empty Cari business database.
+Version 1 legacy migration is intended for an empty Hesiva business database.
 
 Critical import errors must roll back the migration.
 
@@ -267,7 +267,7 @@ Cleanup failure must not be treated as permission to delete the original source 
 
 Updates are manual.
 
-Cari shall not require an online update service for normal operation.
+Hesiva shall not require an online update service for normal operation.
 
 Updates should be infrequent and justified by:
 

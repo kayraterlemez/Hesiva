@@ -10,8 +10,8 @@ import pytest
 from alembic import command
 from sqlalchemy import inspect
 
-from cari.database.engine import create_sqlite_engine
-from cari.database.startup import (
+from hesiva.database.engine import create_sqlite_engine
+from hesiva.database.startup import (
     DatabaseInitializationError,
     DatabaseOutdatedError,
     DatabaseState,
@@ -42,7 +42,9 @@ def test_importing_startup_modules_does_not_create_production_data(tmp_path: Pat
         [
             sys.executable,
             "-c",
-            ("import cari.application; import cari.composition; import cari.database.startup"),
+            (
+                "import hesiva.application; import hesiva.composition; import hesiva.database.startup"
+            ),
         ],
         cwd=tmp_path,
         env=environment,
@@ -52,7 +54,7 @@ def test_importing_startup_modules_does_not_create_production_data(tmp_path: Pat
     )
 
     assert not data_home.exists()
-    assert not (tmp_path / "cari.db").exists()
+    assert not (tmp_path / "hesiva.db").exists()
 
 
 def test_missing_database_is_classified_without_creating_it(tmp_path: Path) -> None:
@@ -67,7 +69,7 @@ def test_missing_database_is_classified_without_creating_it(tmp_path: Path) -> N
 
 
 def test_missing_database_initializes_to_head_with_expected_schema(tmp_path: Path) -> None:
-    database_path = tmp_path / "cari.db"
+    database_path = tmp_path / "hesiva.db"
 
     status = prepare_database(database_path)
 
@@ -93,7 +95,7 @@ def test_current_database_does_not_run_initialization_again(
     def fail_if_called(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("Alembic upgrade must not run for a current database.")
 
-    monkeypatch.setattr("cari.database.startup.command.upgrade", fail_if_called)
+    monkeypatch.setattr("hesiva.database.startup.command.upgrade", fail_if_called)
 
     status = prepare_database(database_path)
 
@@ -159,12 +161,12 @@ def test_failed_fresh_initialization_leaves_no_final_or_temporary_database(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    database_path = tmp_path / "cari.db"
+    database_path = tmp_path / "hesiva.db"
 
     def fail_upgrade(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("Synthetic migration failure")
 
-    monkeypatch.setattr("cari.database.startup.command.upgrade", fail_upgrade)
+    monkeypatch.setattr("hesiva.database.startup.command.upgrade", fail_upgrade)
 
     with pytest.raises(DatabaseInitializationError, match="final path was left untouched"):
         initialize_database_to_head(database_path)
@@ -174,7 +176,7 @@ def test_failed_fresh_initialization_leaves_no_final_or_temporary_database(
 
 
 def test_initialization_never_replaces_existing_file(tmp_path: Path) -> None:
-    database_path = tmp_path / "cari.db"
+    database_path = tmp_path / "hesiva.db"
     database_path.write_bytes(b"preserve existing file")
     digest_before = file_digest(database_path)
 
@@ -189,7 +191,7 @@ def test_fresh_initialization_syncs_parent_after_publication(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    database_path = tmp_path / "cari.db"
+    database_path = tmp_path / "hesiva.db"
     synced_directories: list[Path] = []
 
     def record_directory_sync(published_database_path: Path) -> None:
@@ -197,7 +199,7 @@ def test_fresh_initialization_syncs_parent_after_publication(
         synced_directories.append(published_database_path.parent)
 
     monkeypatch.setattr(
-        "cari.database.startup._sync_parent_directory",
+        "hesiva.database.startup._sync_parent_directory",
         record_directory_sync,
     )
 
@@ -212,13 +214,13 @@ def test_directory_sync_failure_is_reported_without_deleting_published_database(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    database_path = tmp_path / "cari.db"
+    database_path = tmp_path / "hesiva.db"
 
     def fail_directory_sync(_published_database_path: Path) -> None:
         raise DatabaseInitializationError("Synthetic directory sync failure")
 
     monkeypatch.setattr(
-        "cari.database.startup._sync_parent_directory",
+        "hesiva.database.startup._sync_parent_directory",
         fail_directory_sync,
     )
 
@@ -231,7 +233,7 @@ def test_directory_sync_failure_is_reported_without_deleting_published_database(
 
 def test_python_module_starts_against_isolated_xdg_directory(tmp_path: Path) -> None:
     data_home = tmp_path / "xdg-data"
-    database_path = data_home / "cari" / "cari.db"
+    database_path = data_home / "hesiva" / "hesiva.db"
     environment = os.environ.copy()
     environment["XDG_DATA_HOME"] = str(data_home)
     environment["QT_QPA_PLATFORM"] = "offscreen"
@@ -239,7 +241,7 @@ def test_python_module_starts_against_isolated_xdg_directory(tmp_path: Path) -> 
     environment["PYTHONPATH"] = str(PROJECT_ROOT / "src")
 
     process = subprocess.Popen(
-        [sys.executable, "-m", "cari"],
+        [sys.executable, "-m", "hesiva"],
         cwd=tmp_path,
         env=environment,
         stdout=subprocess.PIPE,
@@ -251,7 +253,7 @@ def test_python_module_starts_against_isolated_xdg_directory(tmp_path: Path) -> 
         while time.monotonic() < deadline:
             if process.poll() is not None:
                 stdout, stderr = process.communicate()
-                pytest.fail(f"Cari exited before reaching the event loop: {stdout!r} {stderr!r}")
+                pytest.fail(f"Hesiva exited before reaching the event loop: {stdout!r} {stderr!r}")
             if (
                 database_path.exists()
                 and inspect_database(database_path).state is DatabaseState.CURRENT
@@ -259,10 +261,10 @@ def test_python_module_starts_against_isolated_xdg_directory(tmp_path: Path) -> 
                 break
             time.sleep(0.05)
         else:
-            pytest.fail("Cari did not initialize its isolated database before the timeout.")
+            pytest.fail("Hesiva did not initialize its isolated database before the timeout.")
 
         assert process.poll() is None
-        assert database_path == data_home / "cari" / "cari.db"
+        assert database_path == data_home / "hesiva" / "hesiva.db"
     finally:
         if process.poll() is None:
             process.terminate()

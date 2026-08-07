@@ -2,9 +2,9 @@
 
 ## Introduction
 
-This document defines the functional and non-functional requirements for the Cari desktop application.
+This document defines the functional and non-functional requirements for the Hesiva desktop application.
 
-Cari is a local-first desktop application used to track customers, optional animals, financial movements, reminders, reports, backups, and migration from the legacy Veresiye 5 application.
+Hesiva is a local-first desktop application used to track customers, optional animals, financial movements, reminders, reports, backups, and migration from the legacy Veresiye 5 application.
 
 Version 1 is intentionally focused. Inventory, medical records, cloud synchronization, and multi-user networking are outside the Version 1 scope.
 
@@ -437,9 +437,9 @@ Priority: Critical
 
 ### REQ-042
 
-Version 1 legacy import is intended for an empty Cari business database.
+Version 1 legacy import is intended for an empty Hesiva business database.
 
-Merging a complete legacy database into an already active Cari business database is outside the Version 1 scope.
+Merging a complete legacy database into an already active Hesiva business database is outside the Version 1 scope.
 
 Priority: High
 

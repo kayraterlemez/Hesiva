@@ -5,8 +5,8 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from cari.database.engine import create_sqlite_engine
-from cari.database.session import create_session_factory
+from hesiva.database.engine import create_sqlite_engine
+from hesiva.database.session import create_session_factory
 
 
 def test_engine_connects_to_explicit_temporary_database(tmp_path: Path) -> None:
@@ -26,7 +26,7 @@ def test_engine_connects_to_explicit_temporary_database(tmp_path: Path) -> None:
 
 def test_engine_rejects_relative_database_path() -> None:
     with pytest.raises(ValueError, match="must be absolute"):
-        create_sqlite_engine(Path("cari.db"))
+        create_sqlite_engine(Path("hesiva.db"))
 
 
 def test_engine_enforces_sqlite_foreign_keys(tmp_path: Path) -> None:

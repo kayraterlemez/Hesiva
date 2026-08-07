@@ -1,10 +1,10 @@
-# Cari
+# Hesiva
 
-Cari, büyükbaş veteriner hekimliği iş akışında kullanılan müşteri hesap, borç ve ödeme takibini modernleştirmek amacıyla geliştirilen offline-first masaüstü uygulamasıdır.
+Hesiva, büyükbaş veteriner hekimliği iş akışında kullanılan müşteri hesap, borç ve ödeme takibini modernleştirmek amacıyla geliştirilen offline-first masaüstü uygulamasıdır.
 
 Proje, eski Veresiye 5 uygulamasının yerine geçecek şekilde tasarlanmıştır.
 
-## Neden Cari?
+## Neden Hesiva?
 
 Mevcut eski yazılım:
 
@@ -13,11 +13,11 @@ Mevcut eski yazılım:
 - veri taşıma ve yedekleme açısından sınırlı
 - uzun vadeli bakım için uygun değil
 
-Cari'nin amacı mevcut iş akışını tamamen değiştirmek değil; onu güvenilir, modern ve sürdürülebilir bir masaüstü uygulamasına taşımaktır.
+Hesiva'nın amacı mevcut iş akışını tamamen değiştirmek değil; onu güvenilir, modern ve sürdürülebilir bir masaüstü uygulamasına taşımaktır.
 
 ## Temel yaklaşım
 
-Cari şu prensiplerle geliştirilmektedir:
+Hesiva şu prensiplerle geliştirilmektedir:
 
 - offline-first
 - yerel SQLite veritabanı
@@ -32,7 +32,7 @@ Cari şu prensiplerle geliştirilmektedir:
 
 ## Version 1 kapsamı
 
-Cari V1 aşağıdaki temel alanları kapsar.
+Hesiva V1 aşağıdaki temel alanları kapsar.
 
 ### Müşteriler
 
@@ -106,7 +106,7 @@ Hayvan kaydı finansal işlem için zorunlu değildir.
 
 ### Veresiye 5 veri aktarımı
 
-V1, eski Veresiye 5 verilerinin boş bir Cari veritabanına aktarılmasını hedefler.
+V1, eski Veresiye 5 verilerinin boş bir Hesiva veritabanına aktarılmasını hedefler.
 
 Planlanan aktarım:
 
@@ -120,7 +120,7 @@ Eski kaynak veri salt okunur olarak açılır ve değiştirilmez.
 
 ## V1 dışında kalanlar
 
-Cari V1 bilinçli olarak şunları içermez:
+Hesiva V1 bilinçli olarak şunları içermez:
 
 - stok yönetimi
 - ürün kataloğu
@@ -164,16 +164,16 @@ Cari V1 bilinçli olarak şunları içermez:
 
 ## Mimari
 
-Cari katmanlı ve açık bir mimari kullanır:
+Hesiva katmanlı ve açık bir mimari kullanır:
 
-```text
-UI
-↓
-Services
-↓
-Repositories
-↓
-SQLAlchemy / SQLite
+    UI
+    ↓
+    Services
+    ↓
+    Repositories
+    ↓
+    SQLAlchemy / SQLite
+
 ## Temel kurallar
 
 - UI doğrudan SQL çalıştırmaz.
@@ -225,16 +225,16 @@ Aktif hatırlatma:
 
 ## Uygulama başlangıcı ve veritabanı güvenliği
 
-Cari production veritabanını uygulama veri dizininde tutar.
+Hesiva production veritabanını uygulama veri dizininde tutar.
 
 Linux:
 
-- `$XDG_DATA_HOME/cari/cari.db`
-- fallback: `~/.local/share/cari/cari.db`
+- `$XDG_DATA_HOME/hesiva/hesiva.db`
+- fallback: `~/.local/share/hesiva/hesiva.db`
 
 Windows:
 
-- `%LOCALAPPDATA%/Cari/cari.db`
+- `%LOCALAPPDATA%/Hesiva/hesiva.db`
 
 Production schema Alembic ile yönetilir.
 
@@ -251,7 +251,7 @@ Backup sistemi devreye alınmadan mevcut kullanıcı verisine otomatik schema up
 
 ## UI / UX
 
-Cari masaüstü kullanımına göre tasarlanmıştır.
+Hesiva masaüstü kullanımına göre tasarlanmıştır.
 
 Ana hedefler:
 
@@ -264,7 +264,9 @@ Temel görsel referans:
 
 `docs/design/V1UIFreeze.pdf`
 
-Bu dosya Cari V1 için frozen görsel implementasyon referansıdır.
+Bu dosya Hesiva V1 için frozen görsel implementasyon referansıdır.
+
+PDF, projenin eski çalışma adı olan Cari döneminde oluşturulmuştur. Uygulamada görünen ürün adı Hesiva olarak uygulanır.
 
 Ana pencere:
 
@@ -307,6 +309,7 @@ Destructive aksiyonlar Enter'a varsayılan olarak bağlanmaz.
 - transaction / payment / void iş kuralları
 - test altyapısı
 - V1 UI Freeze
+- Cari → Hesiva proje rename'i
 
 Sıradaki geliştirme aşaması:
 
@@ -319,7 +322,7 @@ Daha sonra müşteri yönetimi ve diğer kullanıcı iş akışları sırayla ge
 Repository'yi klonlayın:
 
     git clone <repository-url>
-    cd cari
+    cd hesiva
 
 Sanal ortam oluşturun:
 
@@ -332,7 +335,11 @@ Development kurulumu:
 
 ## Çalıştırma
 
-    python -m cari
+    python -m hesiva
+
+Kurulum sonrasında console entry point kullanılıyorsa:
+
+    hesiva
 
 Linux'ta Qt ortamına bağlı olarak gerekli sistem paketlerinin kurulu olması gerekebilir.
 

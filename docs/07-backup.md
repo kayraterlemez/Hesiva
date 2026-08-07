@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The backup system protects Cari customer and financial history from software errors, user mistakes, operating-system problems, and hardware failure.
+The backup system protects Hesiva customer and financial history from software errors, user mistakes, operating-system problems, and hardware failure.
 
 Backup is a core Version 1 feature.
 
@@ -29,7 +29,7 @@ The user should not need database knowledge to create or restore a backup.
 
 # Backup Destination Setup
 
-During initial application setup, Cari should ask the user to choose a preferred backup destination.
+During initial application setup, Hesiva should ask the user to choose a preferred backup destination.
 
 The interface should recommend a location on a different physical device when one is available, such as:
 
@@ -47,13 +47,13 @@ Default local fallback locations:
 Linux:
 
 ```text
-~/.local/share/cari/backups/
+~/.local/share/hesiva/backups/
 ```
 
 Windows:
 
 ```text
-%LOCALAPPDATA%\Cari\Backups\
+%LOCALAPPDATA%\Hesiva\Backups\
 ```
 
 The user may change the destination later.
@@ -148,7 +148,7 @@ Version 1 uses a single ZIP archive for portability and inspection.
 Example filename:
 
 ```text
-cari_backup_2026-08-07_0105.zip
+hesiva_backup_2026-08-07_0105.zip
 ```
 
 A timestamp prevents accidental filename reuse.
@@ -163,7 +163,7 @@ Backup metadata should contain enough information for safe restore.
 
 Recommended fields:
 
-- Cari application version
+- Hesiva application version
 - Database schema version
 - Backup creation timestamp
 - Backup format version
@@ -205,7 +205,7 @@ A reasonable starting policy is:
 
 Retention must never delete the only known valid backup.
 
-Retention logic must operate only inside a configured Cari backup destination and must never delete unrelated files.
+Retention logic must operate only inside a configured Hesiva backup destination and must never delete unrelated files.
 
 External/manual backups may be excluded from automatic retention when appropriate.
 
@@ -253,7 +253,7 @@ The restore workflow should prefer atomic rename/replace operations where suppor
 
 # Backup Compatibility
 
-Newer Cari versions should restore older supported backup formats whenever practical.
+Newer Hesiva versions should restore older supported backup formats whenever practical.
 
 If migration is required after restoring an older database:
 
@@ -304,9 +304,9 @@ A backup system is not considered trusted until a successful restore has been de
 
 # Import Protection
 
-Version 1 legacy import is primarily intended for an empty Cari business database.
+Version 1 legacy import is primarily intended for an empty Hesiva business database.
 
-If an existing Cari database contains business data and an operation may modify it, an appropriate recovery backup is required before proceeding.
+If an existing Hesiva database contains business data and an operation may modify it, an appropriate recovery backup is required before proceeding.
 
 The original legacy source remains independent and read-only.
 

@@ -2,11 +2,11 @@
 
 ## Purpose
 
-This roadmap defines the development order for Cari Version 1.
+This roadmap defines the development order for Hesiva Version 1.
 
 Its purpose is to keep scope under control, prioritize data integrity, and ensure that each milestone remains understandable and testable.
 
-Cari will be used for real daily financial tracking. Reliability and simplicity therefore take priority over feature count.
+Hesiva will be used for real daily financial tracking. Reliability and simplicity therefore take priority over feature count.
 
 ---
 
@@ -303,14 +303,14 @@ Tasks:
 - Import legacy data
 - Reconcile aggregate totals
 - Compare representative customers side by side
-- Create first verified Cari backup
+- Create first verified Hesiva backup
 - Keep legacy application/data available read-only during transition
 - Begin daily use
 - Record and fix only blocking/serious issues before declaring Version 1 stable
 
 Expected result:
 
-Cari becomes the primary daily application without losing historical records.
+Hesiva becomes the primary daily application without losing historical records.
 
 ---
 

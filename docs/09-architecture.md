@@ -2,11 +2,11 @@
 
 ## Purpose
 
-This document defines the technical architecture of the Cari application.
+This document defines the technical architecture of the Hesiva application.
 
 The architecture exists to keep the application understandable, reliable, testable, and maintainable over many years of use.
 
-Cari is a local-first desktop business application. It is not a distributed system, web application, cloud service, or enterprise ERP platform.
+Hesiva is a local-first desktop business application. It is not a distributed system, web application, cloud service, or enterprise ERP platform.
 
 The architecture should therefore remain intentionally simple.
 
@@ -24,7 +24,7 @@ The primary architectural goals are:
 
 # Core Architecture
 
-Cari uses a layered architecture.
+Hesiva uses a layered architecture.
 
 The primary dependency flow is:
 
@@ -58,7 +58,7 @@ The architecture should contain only abstractions that solve real problems.
 
 Patterns must not be introduced only because they are commonly used in large software projects.
 
-Cari is expected to remain a relatively small desktop application.
+Hesiva is expected to remain a relatively small desktop application.
 
 Simple and readable code is preferred over theoretically perfect but complicated architecture.
 
@@ -187,11 +187,11 @@ Windows is a secondary supported platform.
 The source tree should approximately follow this structure:
 
 ```text
-cari/
+hesiva/
 ├── docs/
 │
 ├── src/
-│   └── cari/
+│   └── hesiva/
 │       ├── __init__.py
 │       ├── __main__.py
 │       ├── application.py
@@ -403,7 +403,7 @@ Reminder
 - cancelled_at (nullable)
 ```
 
-`registered_on` is business/history data and is distinct from `created_at`, which records when the Cari row itself was created.
+`registered_on` is business/history data and is distinct from `created_at`, which records when the Hesiva row itself was created.
 
 Customers and animals use nullable archive timestamps rather than Boolean archive flags. Reminders use completion/cancellation timestamps rather than a Boolean status so the application preserves when those events occurred.
 
@@ -812,7 +812,7 @@ Legacy identifiers are optional reference metadata only and never become current
 
 # Import Transactions
 
-Version 1 legacy migration is intended for an empty Cari business database.
+Version 1 legacy migration is intended for an empty Hesiva business database.
 
 This intentionally avoids unsafe merge semantics during the first production migration.
 
@@ -901,13 +901,13 @@ Examples:
 Linux:
 
 ```text
-~/.local/share/cari/
+~/.local/share/hesiva/
 ```
 
 Windows:
 
 ```text
-%LOCALAPPDATA%\Cari\
+%LOCALAPPDATA%\Hesiva\
 ```
 
 Exact paths should be resolved through a cross-platform helper rather than hard-coded.
@@ -1130,7 +1130,7 @@ Future flexibility must not justify unnecessary complexity in Version 1.
 
 # Summary
 
-Cari uses a simple layered architecture:
+Hesiva uses a simple layered architecture:
 
 ```text
 PySide6 UI

@@ -1,8 +1,8 @@
-# Cari
+# Hesiva
 
 ## Vision
 
-Cari is an offline-first desktop application for tracking customer balances, payments, and reminders.
+Hesiva is an offline-first desktop application for tracking customer balances, payments, and reminders.
 
 It is designed for small businesses that need a reliable, simple, and fast way to manage customer accounts without the complexity of full accounting software.
 

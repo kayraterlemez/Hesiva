@@ -4,10 +4,10 @@ from pathlib import Path
 import pytest
 from sqlalchemy.orm import object_session
 
-from cari.application import ApplicationStartupError, create_application_context
-from cari.composition import ApplicationContext
-from cari.database.paths import DATABASE_FILENAME
-from cari.database.startup import DatabaseState, inspect_database
+from hesiva.application import ApplicationStartupError, create_application_context
+from hesiva.composition import ApplicationContext
+from hesiva.database.paths import DATABASE_FILENAME
+from hesiva.database.startup import DatabaseState, inspect_database
 
 
 @pytest.fixture
