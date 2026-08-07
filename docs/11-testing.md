@@ -34,7 +34,7 @@ The highest-priority areas are:
 
 1. Financial calculations
 2. Database integrity
-3. Transaction creation and correction
+3. Transaction creation and void-based correction
 4. Backup and restore
 5. Legacy data import
 6. Database migrations
@@ -595,17 +595,21 @@ Tests must also verify that a voided transaction is excluded from:
 
 while remaining retrievable when historical/voided records are intentionally requested.
 
-# Transaction Editing
+# Transaction Correction
 
-If historical transactions can be edited, tests must verify that editing:
+Version 1 does not directly edit an existing financial transaction. Correction voids the incorrect
+transaction and creates a separate correct transaction when required.
 
-- Changes the correct transaction
-- Does not create duplicate records
-- Updates calculated balance correctly
-- Preserves required metadata
-- Does not affect another customer
+Tests must verify that correction:
 
-The exact editing policy must be finalized during design review.
+- Preserves the voided transaction as historical data.
+- Excludes the voided amount from active balance and normal reports.
+- Creates the corrected entry as a new transaction with its own identity.
+- Does not silently change the original transaction's business fields.
+- Allows the void reason to remain absent.
+- Does not affect another customer.
+
+Version 1 does not require correction-lineage fields or audit tables linking the two records.
 
 ---
 

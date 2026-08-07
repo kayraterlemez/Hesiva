@@ -117,8 +117,8 @@ Tasks:
 - Signed integer-kuruş transaction model
 - Create debt transaction
 - Receive payment
-- Edit/correct transaction
-- Void transaction
+- Correct an incorrect transaction by voiding it and creating a new transaction when required
+- Preserve voided transactions as history without modifying them in place
 - Automatic balance calculation from active history
 - Transaction history
 - Free-text descriptions

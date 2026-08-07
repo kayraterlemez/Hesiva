@@ -231,9 +231,9 @@ with optional animal and note information.
 | amount_kurus | Integer | Signed non-zero monetary movement in kuruş |
 | note | Text / NULL | Optional note |
 | created_at | DateTime | Cari record creation timestamp |
-| updated_at | DateTime | Last modification timestamp |
+| updated_at | DateTime | Last technical metadata modification timestamp |
 | voided_at | DateTime / NULL | When the movement was voided |
-| void_reason | Text / NULL | Optional correction/void reason |
+| void_reason | Text / NULL | Optional void reason |
 
 ---
 
@@ -251,7 +251,10 @@ with optional animal and note information.
 - Legacy import may preserve the original legacy time when valid.
 - Voided transactions remain stored but do not affect active balance, last activity, or normal report totals.
 - Transactions are never physically deleted during normal use.
-- Editing a transaction is a correction operation and updates `updated_at`.
+- Version 1 does not directly edit an existing transaction's financial or business fields.
+- Correcting an entry means voiding the incorrect transaction and creating a new correct transaction when required.
+- `updated_at` remains technical metadata for record/lifecycle changes; its presence does not imply an ordinary transaction-editing workflow.
+- `void_reason` is optional.
 
 ---
 

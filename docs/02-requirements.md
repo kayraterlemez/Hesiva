@@ -172,9 +172,13 @@ Priority: Critical
 
 ### REQ-016
 
-Users shall be able to correct an existing transaction.
+Version 1 shall not allow users to directly edit an existing financial transaction.
 
-Editing must update the calculated balance immediately and must not affect another customer's records.
+To correct an incorrect transaction, the user shall void the existing transaction and create a new
+correct transaction when required.
+
+The voided transaction shall remain stored as historical data and shall not affect the active
+balance.
 
 Priority: High
 
@@ -185,6 +189,8 @@ Priority: High
 Users shall be able to void an incorrect transaction without physically deleting it.
 
 Voided transactions shall remain available for historical/reference purposes but shall not affect active balances or reports.
+
+A void reason may be recorded but shall remain optional.
 
 Priority: High
 

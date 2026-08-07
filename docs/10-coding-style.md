@@ -589,13 +589,15 @@ Historical financial records require special care.
 
 Transactions must not normally be physically deleted.
 
-Incorrect financial records use the project's approved edit/correction or void mechanism.
+Version 1 corrects an incorrect financial record by voiding it and creating a new transaction when
+required. Existing transaction business fields are not directly edited.
 
 Voided records remain stored but no longer affect active balances, last activity, or normal reports.
 
 UI wording may use a familiar destructive label only if the resulting confirmation clearly communicates what will happen; the implementation must still follow the data-preservation policy.
 
-Editing or voiding a historical record must not silently affect unrelated customers or relationships.
+Voiding a historical record or creating its correction must not silently affect unrelated customers
+or relationships.
 
 # Validation
 
@@ -803,7 +805,7 @@ Bad:
 Better:
 
 ```python
-# TODO(#42): Support void reasons when transaction auditing is added.
+# TODO(#42): Add a regression test before changing this parser.
 ```
 
 Important unfinished work should normally be tracked through the project's issue/task system rather than forgotten inside source code.
