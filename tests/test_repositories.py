@@ -210,6 +210,8 @@ def test_transaction_repository_gets_records_and_orders_active_history(
         voided,
         *active_history,
     ]
+    assert repository.sum_active_amounts_for_customer(customer.id) == 1400
+    assert repository.sum_active_amounts_for_customer(999) == 0
 
 
 def test_transaction_repository_get_by_legacy_id_returns_none_when_missing(

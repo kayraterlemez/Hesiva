@@ -1,4 +1,4 @@
-from sqlalchemy import Select, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
 from cari.models.transaction import Transaction
@@ -40,6 +40,13 @@ class TransactionRepository:
     ) -> list[Transaction]:
         statement = select(Transaction).where(Transaction.animal_id == animal_id)
         return self._list_history(statement, include_voided=include_voided)
+
+    def sum_active_amounts_for_customer(self, customer_id: int) -> int:
+        statement = select(func.coalesce(func.sum(Transaction.amount_kurus), 0)).where(
+            Transaction.customer_id == customer_id,
+            Transaction.voided_at.is_(None),
+        )
+        return int(self._session.scalar(statement))
 
     def _list_history(
         self,
