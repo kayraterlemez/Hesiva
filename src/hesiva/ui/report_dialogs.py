@@ -1,5 +1,6 @@
 import logging
 from datetime import date
+from pathlib import Path
 
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
@@ -7,11 +8,13 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDateEdit,
     QDialog,
+    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QMessageBox,
     QPushButton,
     QSpinBox,
     QTableWidget,
@@ -23,7 +26,9 @@ from PySide6.QtWidgets import (
 from hesiva.composition import ApplicationContext
 from hesiva.read_models import CustomerStatement, MonthlySummary, YearlySummary
 from hesiva.services import ServiceError, ValidationError
+from hesiva.ui import report_output
 from hesiva.ui.presentation import (
+    TURKISH_MONTH_NAMES,
     format_balance_kurus,
     format_date,
     format_money_kurus,
@@ -31,21 +36,6 @@ from hesiva.ui.presentation import (
 )
 
 LOGGER = logging.getLogger(__name__)
-
-MONTH_NAMES = (
-    "Ocak",
-    "Şubat",
-    "Mart",
-    "Nisan",
-    "Mayıs",
-    "Haziran",
-    "Temmuz",
-    "Ağustos",
-    "Eylül",
-    "Ekim",
-    "Kasım",
-    "Aralık",
-)
 
 
 def _to_qdate(value: date) -> QDate:
@@ -82,24 +72,57 @@ def _create_value_card(caption: str, object_name: str) -> tuple[QFrame, QLabel]:
     return card, value_label
 
 
-def _create_close_footer(dialog: QDialog, *, include_pdf: bool) -> QHBoxLayout:
+def _create_close_footer(
+    dialog: QDialog,
+) -> tuple[QHBoxLayout, QPushButton, QPushButton]:
     footer = QHBoxLayout()
     footer.addStretch()
     print_button = QPushButton("Yazdır", dialog)
     print_button.setObjectName("reportPrintButton")
     print_button.setEnabled(False)
     footer.addWidget(print_button)
-    if include_pdf:
-        pdf_button = QPushButton("PDF Olarak Kaydet", dialog)
-        pdf_button.setObjectName("reportPdfButton")
-        pdf_button.setEnabled(False)
-        footer.addWidget(pdf_button)
+    pdf_button = QPushButton("PDF Olarak Kaydet", dialog)
+    pdf_button.setObjectName("reportPdfButton")
+    pdf_button.setEnabled(False)
+    footer.addWidget(pdf_button)
     close_button = QPushButton("Kapat", dialog)
     close_button.setObjectName("reportCloseButton")
     close_button.setProperty("primary", True)
     close_button.clicked.connect(dialog.accept)
     footer.addWidget(close_button)
-    return footer
+    return footer, print_button, pdf_button
+
+
+def _save_report(parent: QDialog, report: report_output.ReportData) -> None:
+    selected_path, _selected_filter = QFileDialog.getSaveFileName(
+        parent,
+        "PDF Olarak Kaydet",
+        report_output.suggested_pdf_filename(report),
+        "PDF Dosyaları (*.pdf)",
+    )
+    if not selected_path:
+        return
+    try:
+        report_output.write_report_pdf(report, Path(selected_path))
+    except report_output.ReportOutputError:
+        LOGGER.exception("Report PDF output failed")
+        QMessageBox.warning(
+            parent,
+            "PDF Kaydedilemedi",
+            "PDF dosyası kaydedilemedi. Lütfen konumu kontrol edip yeniden deneyin.",
+        )
+
+
+def _print_report(parent: QDialog, report: report_output.ReportData) -> None:
+    try:
+        report_output.print_report(report, parent)
+    except report_output.ReportOutputError:
+        LOGGER.exception("Report print output failed")
+        QMessageBox.warning(
+            parent,
+            "Yazdırma Başarısız",
+            "Rapor yazdırılamadı. Lütfen yazıcı ayarlarını kontrol edin.",
+        )
 
 
 class CustomerStatementDialog(QDialog):
@@ -194,13 +217,18 @@ class CustomerStatementDialog(QDialog):
         layout.addLayout(totals)
         layout.addWidget(self.state_label)
         layout.addWidget(self.table, 1)
-        layout.addLayout(_create_close_footer(self, include_pdf=True))
+        footer, self.print_button, self.pdf_button = _create_close_footer(self)
+        layout.addLayout(footer)
 
         self.period_start_input.editingFinished.connect(self.refresh_statement)
         self.period_end_input.editingFinished.connect(self.refresh_statement)
+        self.print_button.clicked.connect(self._print_current_report)
+        self.pdf_button.clicked.connect(self._save_current_report)
         self.refresh_statement()
 
     def refresh_statement(self) -> None:
+        self.statement = None
+        self._set_output_enabled(False)
         period_start = self.period_start_input.date().toPython()
         period_end = self.period_end_input.date().toPython()
         if period_start > period_end:
@@ -256,6 +284,7 @@ class CustomerStatementDialog(QDialog):
             self.state_label.setText("Seçilen tarih aralığında hesap hareketi bulunmuyor.")
             self.state_label.show()
             self.table.hide()
+        self._set_output_enabled(True)
 
     def _show_error(self, message: str) -> None:
         self.statement = None
@@ -265,6 +294,18 @@ class CustomerStatementDialog(QDialog):
         self.state_label.show()
         self.state_label.style().unpolish(self.state_label)
         self.state_label.style().polish(self.state_label)
+
+    def _save_current_report(self) -> None:
+        if self.statement is not None:
+            _save_report(self, self.statement)
+
+    def _print_current_report(self) -> None:
+        if self.statement is not None:
+            _print_report(self, self.statement)
+
+    def _set_output_enabled(self, enabled: bool) -> None:
+        self.print_button.setEnabled(enabled)
+        self.pdf_button.setEnabled(enabled)
 
 
 class MonthlySummaryDialog(QDialog):
@@ -291,7 +332,7 @@ class MonthlySummaryDialog(QDialog):
         self.year_input.setValue(today.year)
         self.month_input = QComboBox(self)
         self.month_input.setObjectName("monthlyMonth")
-        for month, name in enumerate(MONTH_NAMES, start=1):
+        for month, name in enumerate(TURKISH_MONTH_NAMES, start=1):
             self.month_input.addItem(name, month)
         self.month_input.setCurrentIndex(today.month - 1)
         filters = QHBoxLayout()
@@ -322,13 +363,18 @@ class MonthlySummaryDialog(QDialog):
         layout.addLayout(totals)
         layout.addWidget(self.state_label)
         layout.addStretch()
-        layout.addLayout(_create_close_footer(self, include_pdf=False))
+        footer, self.print_button, self.pdf_button = _create_close_footer(self)
+        layout.addLayout(footer)
 
         self.year_input.valueChanged.connect(self.refresh_summary)
         self.month_input.currentIndexChanged.connect(self.refresh_summary)
+        self.print_button.clicked.connect(self._print_current_report)
+        self.pdf_button.clicked.connect(self._save_current_report)
         self.refresh_summary()
 
     def refresh_summary(self) -> None:
+        self.summary = None
+        self._set_output_enabled(False)
         try:
             with self._application_context.services() as services:
                 summary = services.report.get_monthly_summary(
@@ -351,6 +397,19 @@ class MonthlySummaryDialog(QDialog):
             if summary.debt_kurus == summary.payment_kurus == 0
             else ""
         )
+        self._set_output_enabled(True)
+
+    def _save_current_report(self) -> None:
+        if self.summary is not None:
+            _save_report(self, self.summary)
+
+    def _print_current_report(self) -> None:
+        if self.summary is not None:
+            _print_report(self, self.summary)
+
+    def _set_output_enabled(self, enabled: bool) -> None:
+        self.print_button.setEnabled(enabled)
+        self.pdf_button.setEnabled(enabled)
 
 
 class YearlySummaryDialog(QDialog):
@@ -410,12 +469,17 @@ class YearlySummaryDialog(QDialog):
         layout.addLayout(totals)
         layout.addWidget(self.state_label)
         layout.addWidget(self.table, 1)
-        layout.addLayout(_create_close_footer(self, include_pdf=False))
+        footer, self.print_button, self.pdf_button = _create_close_footer(self)
+        layout.addLayout(footer)
 
         self.year_input.valueChanged.connect(self.refresh_summary)
+        self.print_button.clicked.connect(self._print_current_report)
+        self.pdf_button.clicked.connect(self._save_current_report)
         self.refresh_summary()
 
     def refresh_summary(self) -> None:
+        self.summary = None
+        self._set_output_enabled(False)
         try:
             with self._application_context.services() as services:
                 summary = services.report.get_yearly_summary(year=self.year_input.value())
@@ -432,7 +496,11 @@ class YearlySummaryDialog(QDialog):
         self.net_label.setText(format_signed_money_kurus(summary.net_kurus))
         self.table.setRowCount(12)
         for row_index, month in enumerate(summary.months):
-            self.table.setItem(row_index, 0, QTableWidgetItem(MONTH_NAMES[month.month - 1]))
+            self.table.setItem(
+                row_index,
+                0,
+                QTableWidgetItem(TURKISH_MONTH_NAMES[month.month - 1]),
+            )
             self.table.setItem(row_index, 1, _money_item(format_money_kurus(month.debt_kurus)))
             self.table.setItem(row_index, 2, _money_item(format_money_kurus(month.payment_kurus)))
             self.table.setItem(
@@ -445,3 +513,16 @@ class YearlySummaryDialog(QDialog):
             if summary.debt_kurus == summary.payment_kurus == 0
             else ""
         )
+        self._set_output_enabled(True)
+
+    def _save_current_report(self) -> None:
+        if self.summary is not None:
+            _save_report(self, self.summary)
+
+    def _print_current_report(self) -> None:
+        if self.summary is not None:
+            _print_report(self, self.summary)
+
+    def _set_output_enabled(self, enabled: bool) -> None:
+        self.print_button.setEnabled(enabled)
+        self.pdf_button.setEnabled(enabled)

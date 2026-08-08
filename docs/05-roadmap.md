@@ -192,8 +192,8 @@ Provide the reports required for daily use.
 Tasks:
 
 - Customer account statement
-- Print-ready statement
-- PDF export
+- Print-ready statement and summaries
+- Statement and summary PDF export
 - Monthly debt/payment summary
 - Annual debt/payment summary
 - Net movement summary

@@ -14,6 +14,7 @@ from hesiva.application import create_application_context  # noqa: E402
 from hesiva.composition import ApplicationContext  # noqa: E402
 from hesiva.services import ReportService  # noqa: E402
 from hesiva.ui.main_window import MainWindow  # noqa: E402
+from hesiva.ui import report_output  # noqa: E402
 from hesiva.ui.report_dialogs import (  # noqa: E402
     CustomerStatementDialog,
     MonthlySummaryDialog,
@@ -165,8 +166,8 @@ def test_statement_dialog_renders_real_period_data_and_overpayment(
         assert dialog.table.item(0, 4).text() == "500,00 TL Fazla Ödeme"
         assert dialog.table.item(1, 4).text() == "0,00 TL"
         assert dialog.table.item(2, 4).text() == "1.500,00 TL Borç"
-        assert dialog.findChild(QPushButton, "reportPrintButton").isEnabled() is False
-        assert dialog.findChild(QPushButton, "reportPdfButton").isEnabled() is False
+        assert dialog.findChild(QPushButton, "reportPrintButton").isEnabled()
+        assert dialog.findChild(QPushButton, "reportPdfButton").isEnabled()
         assert not hasattr(dialog.statement, "_sa_instance_state")
     finally:
         dialog.close()
@@ -206,6 +207,8 @@ def test_statement_empty_period_and_read_error_are_distinct(
         assert dialog.state_label.property("errorMessage")
         assert "database details" not in dialog.state_label.text()
         assert not dialog.table.isVisible()
+        assert not dialog.print_button.isEnabled()
+        assert not dialog.pdf_button.isEnabled()
     finally:
         dialog.close()
         application.processEvents()
@@ -226,7 +229,8 @@ def test_monthly_summary_is_application_wide_and_empty_period_is_zero(
         assert dialog.payment_label.text() == "2.000,00 TL"
         assert dialog.net_label.text() == "-1.250,00 TL"
         assert "Alacak" not in dialog.net_label.text()
-        assert not dialog.findChild(QPushButton, "reportPrintButton").isEnabled()
+        assert dialog.findChild(QPushButton, "reportPrintButton").isEnabled()
+        assert dialog.findChild(QPushButton, "reportPdfButton").isEnabled()
 
         dialog.year_input.setValue(2023)
         application.processEvents()
@@ -308,4 +312,128 @@ def test_each_dialog_uses_one_application_facing_report_call(
     finally:
         for dialog in dialogs:
             dialog.close()
+        application.processEvents()
+
+
+def test_cancelled_pdf_save_creates_no_output(
+    application: QApplication,
+    application_context: ApplicationContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seed_report_data(application_context)
+    dialog = MonthlySummaryDialog(application_context, reference_date=date(2026, 8, 9))
+    writes: list[object] = []
+    monkeypatch.setattr(
+        "hesiva.ui.report_dialogs.QFileDialog.getSaveFileName",
+        lambda *_args: ("", ""),
+    )
+    monkeypatch.setattr(
+        report_output,
+        "write_report_pdf",
+        lambda *args: writes.append(args),
+    )
+    try:
+        dialog.pdf_button.click()
+        assert writes == []
+    finally:
+        dialog.close()
+        application.processEvents()
+
+
+def test_export_uses_current_refreshed_report_model(
+    application: QApplication,
+    application_context: ApplicationContext,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seed_report_data(application_context)
+    dialog = MonthlySummaryDialog(application_context, reference_date=date(2026, 8, 9))
+    exported: list[object] = []
+    target = tmp_path / "current.pdf"
+    monkeypatch.setattr(
+        "hesiva.ui.report_dialogs.QFileDialog.getSaveFileName",
+        lambda *_args: (str(target), "PDF Dosyaları (*.pdf)"),
+    )
+    monkeypatch.setattr(
+        report_output,
+        "write_report_pdf",
+        lambda report, _path: exported.append(report),
+    )
+    try:
+        dialog.pdf_button.click()
+        dialog.year_input.setValue(2023)
+        application.processEvents()
+        dialog.pdf_button.click()
+
+        assert len(exported) == 2
+        assert isinstance(exported[0], type(dialog.summary))
+        assert exported[0].year == 2026
+        assert exported[0].month == 8
+        assert exported[1] is dialog.summary
+        assert exported[1].year == 2023
+    finally:
+        dialog.close()
+        application.processEvents()
+
+
+def test_pdf_write_error_is_user_facing_and_does_not_report_success(
+    application: QApplication,
+    application_context: ApplicationContext,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seed_report_data(application_context)
+    dialog = YearlySummaryDialog(application_context, reference_date=date(2026, 8, 9))
+    warnings: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "hesiva.ui.report_dialogs.QFileDialog.getSaveFileName",
+        lambda *_args: (str(tmp_path / "failed.pdf"), "PDF Dosyaları (*.pdf)"),
+    )
+    monkeypatch.setattr(
+        report_output,
+        "write_report_pdf",
+        lambda *_args: (_ for _ in ()).throw(report_output.ReportOutputError("disk details")),
+    )
+    monkeypatch.setattr(
+        "hesiva.ui.report_dialogs.QMessageBox.warning",
+        lambda _parent, title, message: warnings.append((title, message)),
+    )
+    try:
+        dialog.pdf_button.click()
+        assert warnings == [
+            (
+                "PDF Kaydedilemedi",
+                "PDF dosyası kaydedilemedi. Lütfen konumu kontrol edip yeniden deneyin.",
+            )
+        ]
+        assert "disk details" not in warnings[0][1]
+    finally:
+        dialog.close()
+        application.processEvents()
+
+
+def test_print_button_passes_current_model_to_native_print_boundary(
+    application: QApplication,
+    application_context: ApplicationContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seed_report_data(application_context)
+    dialog = YearlySummaryDialog(application_context, reference_date=date(2026, 8, 9))
+    printed: list[object] = []
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        report_output,
+        "print_report",
+        lambda report, _parent: printed.append(report) or False,
+    )
+    monkeypatch.setattr(
+        "hesiva.ui.report_dialogs.QMessageBox.warning",
+        lambda _parent, _title, message: warnings.append(message),
+    )
+    try:
+        dialog.print_button.click()
+        assert printed == [dialog.summary]
+        assert warnings == []
+    finally:
+        dialog.close()
         application.processEvents()

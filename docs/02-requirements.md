@@ -295,6 +295,8 @@ Priority: High
 
 The application shall provide basic monthly and yearly financial summaries for Version 1.
 
+Monthly and yearly summaries shall support local PDF export and standard printing.
+
 At minimum, summaries shall report:
 
 - Debt created during the selected period

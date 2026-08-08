@@ -7,6 +7,21 @@ from enum import StrEnum
 
 from hesiva.read_models import ReminderSummary
 
+TURKISH_MONTH_NAMES = (
+    "Ocak",
+    "Şubat",
+    "Mart",
+    "Nisan",
+    "Mayıs",
+    "Haziran",
+    "Temmuz",
+    "Ağustos",
+    "Eylül",
+    "Ekim",
+    "Kasım",
+    "Aralık",
+)
+
 
 class MoneyInputError(ValueError):
     """Raised when a Turkish-formatted positive money magnitude is invalid."""
