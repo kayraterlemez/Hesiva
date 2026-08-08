@@ -1,4 +1,5 @@
 from hesiva.services.animal_service import AnimalService
+from hesiva.services.customer_detail_service import CustomerDetailService
 from hesiva.services.customer_service import CustomerService
 from hesiva.services.customer_summary_service import CustomerSummaryService
 from hesiva.services.exceptions import (
@@ -18,6 +19,7 @@ __all__ = [
     "AnimalNotFoundError",
     "AnimalService",
     "CustomerNotFoundError",
+    "CustomerDetailService",
     "CustomerService",
     "CustomerSummaryService",
     "InvalidAnimalOwnershipError",

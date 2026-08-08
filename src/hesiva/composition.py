@@ -16,6 +16,7 @@ from hesiva.repositories import (
 )
 from hesiva.services import (
     AnimalService,
+    CustomerDetailService,
     CustomerService,
     CustomerSummaryService,
     ReminderService,
@@ -28,6 +29,7 @@ class ServiceSet:
     """Services sharing one explicitly scoped SQLAlchemy session."""
 
     customer: CustomerService
+    customer_detail: CustomerDetailService
     customer_summary: CustomerSummaryService
     animal: AnimalService
     transaction: TransactionService
@@ -53,6 +55,7 @@ class ApplicationContext:
 
             yield ServiceSet(
                 customer=CustomerService(session, customer_repository),
+                customer_detail=CustomerDetailService(customer_repository),
                 customer_summary=CustomerSummaryService(customer_repository),
                 animal=AnimalService(session, animal_repository, customer_repository),
                 transaction=TransactionService(

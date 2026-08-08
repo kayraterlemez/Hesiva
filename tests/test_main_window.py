@@ -23,10 +23,10 @@ from PySide6.QtWidgets import (  # noqa: E402
 
 from hesiva.application import create_application_context  # noqa: E402
 from hesiva.composition import ApplicationContext  # noqa: E402
-from hesiva.read_models import CustomerSummary, CustomerSummarySort  # noqa: E402
-from hesiva.services import CustomerSummaryService  # noqa: E402
+from hesiva.read_models import CustomerDetail, CustomerSummary, CustomerSummarySort  # noqa: E402
+from hesiva.services import CustomerDetailService, CustomerSummaryService  # noqa: E402
 from hesiva.ui.main_window import MainWindow  # noqa: E402
-from hesiva.ui.presentation import format_balance_kurus  # noqa: E402
+from hesiva.ui.presentation import format_balance_kurus, format_money_kurus  # noqa: E402
 
 WindowFactory = Callable[[], MainWindow]
 
@@ -179,12 +179,110 @@ def test_splitter_keeps_both_panes_usable_when_window_grows(
 
 
 def test_balance_presentation_uses_signed_integer_semantics() -> None:
+    assert format_money_kurus(700_000) == "7.000,00 TL"
     assert format_balance_kurus(200_000) == "2.000,00 TL Borç"
     assert format_balance_kurus(0) == "0,00 TL"
     overpayment = format_balance_kurus(-100_000)
     assert overpayment == "1.000,00 TL Fazla Ödeme"
     assert "Alacak" not in overpayment
     assert not overpayment.startswith("-")
+
+
+def test_selected_customer_general_tab_displays_real_read_only_detail(
+    application_context: ApplicationContext,
+    window_factory: WindowFactory,
+) -> None:
+    with application_context.services() as services:
+        customer = services.customer.create_customer(
+            "Detailed Customer",
+            phone="0532 123 45 67",
+            address="Merkez Mah. Çiftlik Yolu No:12",
+            notes="Genellikle aylık ödeme yapar.",
+            registered_on=date(2022, 1, 14),
+        )
+        services.transaction.create_debt(
+            customer.id,
+            transaction_date=date(2026, 8, 6),
+            description="First debt",
+            amount_kurus=500_000,
+        )
+        services.transaction.create_debt(
+            customer.id,
+            transaction_date=date(2026, 8, 7),
+            description="Second debt",
+            amount_kurus=200_000,
+        )
+        services.transaction.create_payment(
+            customer.id,
+            transaction_date=date(2026, 8, 8),
+            transaction_time=time(10, 30),
+            description="Payment",
+            amount_kurus=300_000,
+        )
+        customer_id = customer.id
+
+    window = window_factory()
+    window.customer_list.setCurrentItem(item_for_customer(window.customer_list, customer_id))
+
+    assert window.customer_detail_stack.currentWidget() is window.customer_detail_shell
+    assert window.customer_name_label.text() == "Detailed Customer"
+    assert window.customer_phone_label.text() == "Telefon: 0532 123 45 67"
+    assert window.general_phone_value.text() == "0532 123 45 67"
+    assert window.general_address_value.text() == "Merkez Mah. Çiftlik Yolu No:12"
+    assert window.general_registered_on_value.text() == "14.01.2022"
+    assert window.general_last_transaction_value.text() == "08.08.2026 10:30"
+    assert window.general_total_debt_value.text() == "7.000,00 TL"
+    assert window.general_total_payment_value.text() == "3.000,00 TL"
+    assert window.general_balance_value.text() == "4.000,00 TL Borç"
+    assert window.general_notes_value.text() == "Genellikle aylık ödeme yapar."
+    assert window.balance_value_label.text() == "4.000,00 TL Borç"
+    assert window.last_transaction_label.text() == "Son İşlem: 08.08.2026 10:30"
+    assert isinstance(window._selected_customer_detail, CustomerDetail)
+    assert not hasattr(window._selected_customer_detail, "_sa_instance_state")
+
+
+def test_general_tab_uses_neutral_values_for_missing_fields_and_no_activity(
+    application_context: ApplicationContext,
+    window_factory: WindowFactory,
+) -> None:
+    with application_context.services() as services:
+        customer = services.customer.create_customer("Minimal Customer")
+        customer_id = customer.id
+
+    window = window_factory()
+    window.customer_list.setCurrentItem(item_for_customer(window.customer_list, customer_id))
+
+    assert window.general_phone_value.text() == "-"
+    assert window.general_address_value.text() == "-"
+    assert window.general_registered_on_value.text() == "-"
+    assert window.general_last_transaction_value.text() == "-"
+    assert window.general_total_debt_value.text() == "0,00 TL"
+    assert window.general_total_payment_value.text() == "0,00 TL"
+    assert window.general_balance_value.text() == "0,00 TL"
+    assert window.general_notes_value.text() == "-"
+    assert window.last_transaction_label.text() == "Son İşlem: -"
+
+
+def test_general_tab_presents_overpayment_without_alacak(
+    application_context: ApplicationContext,
+    window_factory: WindowFactory,
+) -> None:
+    with application_context.services() as services:
+        customer = services.customer.create_customer("Overpaid Customer")
+        services.transaction.create_payment(
+            customer.id,
+            transaction_date=date(2026, 8, 8),
+            description="Overpayment",
+            amount_kurus=100_000,
+        )
+        customer_id = customer.id
+
+    window = window_factory()
+    window.customer_list.setCurrentItem(item_for_customer(window.customer_list, customer_id))
+
+    assert window.general_total_payment_value.text() == "1.000,00 TL"
+    assert window.general_balance_value.text() == "1.000,00 TL Fazla Ödeme"
+    assert "Alacak" not in window.general_balance_value.text()
 
 
 def test_real_active_summaries_populate_structured_customer_rows(
@@ -255,6 +353,8 @@ def test_real_active_summaries_populate_structured_customer_rows(
     assert window.customer_name_label.text() == "Overpaid Customer"
     assert window.balance_value_label.text() == "1.000,00 TL Fazla Ödeme"
     assert window.last_transaction_label.text() == "Son İşlem: 08.08.2026"
+    assert window.general_total_payment_value.text() == "1.000,00 TL"
+    assert window.general_balance_value.text() == "1.000,00 TL Fazla Ödeme"
 
 
 def test_search_and_sort_refresh_preserve_selection_by_customer_id(
@@ -289,6 +389,8 @@ def test_search_and_sort_refresh_preserve_selection_by_customer_id(
     assert customer_ids(customer_list) == [other_customer_id]
     assert customer_list.currentItem() is None
     assert window.customer_detail_stack.currentWidget() is window.no_customer_selected_state
+    assert window._selected_customer_detail is None
+    assert window.general_phone_value.text() == "-"
     assert window.customer_count_label.text() == "Bulunan: 1 müşteri"
 
     window.customer_search_input.clear()
@@ -299,6 +401,78 @@ def test_search_and_sort_refresh_preserve_selection_by_customer_id(
         other_customer_id,
     ]
     assert window.customer_count_label.text() == "Bulunan: 3 müşteri"
+
+
+def test_selection_and_preserved_refresh_load_detail_once_each(
+    application_context: ApplicationContext,
+    window_factory: WindowFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with application_context.services() as services:
+        first = services.customer.create_customer("First Detail")
+        second = services.customer.create_customer("Second Detail")
+        first_id = first.id
+        second_id = second.id
+
+    call_count = 0
+    original_get = CustomerDetailService.get_customer_detail
+
+    def counted_get(service: CustomerDetailService, customer_id: int) -> CustomerDetail:
+        nonlocal call_count
+        call_count += 1
+        return original_get(service, customer_id)
+
+    monkeypatch.setattr(CustomerDetailService, "get_customer_detail", counted_get)
+    window = window_factory()
+    assert call_count == 0
+
+    window.customer_list.setCurrentItem(item_for_customer(window.customer_list, first_id))
+    assert call_count == 1
+    assert window.customer_name_label.text() == "First Detail"
+
+    window.customer_list.setCurrentItem(item_for_customer(window.customer_list, second_id))
+    assert call_count == 2
+    assert window.customer_name_label.text() == "Second Detail"
+
+    with application_context.services() as services:
+        services.customer.update_customer(
+            second_id,
+            full_name="Second Detail",
+            phone="Updated Phone",
+        )
+    window.refresh_customer_summaries()
+    assert call_count == 3
+    assert window._selected_customer_id == second_id
+    assert window.customer_name_label.text() == "Second Detail"
+    assert window.general_phone_value.text() == "Updated Phone"
+
+
+def test_detail_load_failure_keeps_list_and_clears_stale_detail(
+    application_context: ApplicationContext,
+    window_factory: WindowFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with application_context.services() as services:
+        first = services.customer.create_customer("First Customer", phone="111")
+        second = services.customer.create_customer("Second Customer", phone="222")
+        first_id = first.id
+        second_id = second.id
+
+    window = window_factory()
+    window.customer_list.setCurrentItem(item_for_customer(window.customer_list, first_id))
+    assert window.general_phone_value.text() == "111"
+
+    def fail_to_load(_service: CustomerDetailService, _customer_id: int) -> CustomerDetail:
+        raise RuntimeError("Synthetic detail failure")
+
+    monkeypatch.setattr(CustomerDetailService, "get_customer_detail", fail_to_load)
+    window.customer_list.setCurrentItem(item_for_customer(window.customer_list, second_id))
+
+    assert window.customer_list.count() == 2
+    assert window.customer_detail_stack.currentWidget() is window.customer_detail_error_state
+    assert window._selected_customer_detail is None
+    assert window.customer_name_label.text() == ""
+    assert window.general_phone_value.text() == "-"
 
 
 def test_each_ui_refresh_calls_summary_service_once_not_once_per_row(

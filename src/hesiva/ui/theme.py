@@ -104,6 +104,12 @@ QFrame[panel="true"] {
     border: 1px solid #d8dee6;
 }
 
+QFrame[detailPanel="true"] {
+    background: #ffffff;
+    border: 1px solid #d8dee6;
+    border-radius: 4px;
+}
+
 QLabel[sectionHeading="true"] {
     color: #224e79;
     font-size: 13px;
@@ -112,6 +118,19 @@ QLabel[sectionHeading="true"] {
 
 QLabel[muted="true"] {
     color: #6f7a85;
+}
+
+QLabel[detailCaption="true"] {
+    color: #6f7a85;
+    font-weight: 600;
+}
+
+QLabel[detailValue="true"] {
+    color: #263442;
+}
+
+QLabel[financialValue="true"] {
+    font-weight: 700;
 }
 
 QLabel[emptyStateTitle="true"] {

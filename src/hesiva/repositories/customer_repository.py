@@ -1,9 +1,9 @@
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, case, func, select
 from sqlalchemy.orm import Session
 
 from hesiva.models.customer import Customer
 from hesiva.models.transaction import Transaction
-from hesiva.read_models import CustomerSummary, CustomerSummarySort
+from hesiva.read_models import CustomerDetail, CustomerSummary, CustomerSummarySort
 
 
 class CustomerRepository:
@@ -48,6 +48,102 @@ class CustomerRepository:
             .order_by(Customer.full_name, Customer.id)
         )
         return list(self._session.scalars(statement).all())
+
+    def get_active_detail(self, customer_id: int) -> CustomerDetail | None:
+        financial_totals = (
+            select(
+                Transaction.customer_id.label("customer_id"),
+                func.sum(
+                    case(
+                        (Transaction.amount_kurus > 0, Transaction.amount_kurus),
+                        else_=0,
+                    )
+                ).label("total_debt_kurus"),
+                func.sum(
+                    case(
+                        (Transaction.amount_kurus < 0, -Transaction.amount_kurus),
+                        else_=0,
+                    )
+                ).label("total_payment_kurus"),
+                func.sum(Transaction.amount_kurus).label("balance_kurus"),
+            )
+            .where(
+                Transaction.customer_id == customer_id,
+                Transaction.voided_at.is_(None),
+            )
+            .group_by(Transaction.customer_id)
+            .subquery()
+        )
+        ranked_transactions = (
+            select(
+                Transaction.customer_id.label("customer_id"),
+                Transaction.transaction_date.label("transaction_date"),
+                Transaction.transaction_time.label("transaction_time"),
+                func.row_number()
+                .over(
+                    partition_by=Transaction.customer_id,
+                    order_by=(
+                        Transaction.transaction_date.desc(),
+                        Transaction.transaction_time.desc().nulls_last(),
+                        Transaction.id.desc(),
+                    ),
+                )
+                .label("latest_rank"),
+            )
+            .where(
+                Transaction.customer_id == customer_id,
+                Transaction.voided_at.is_(None),
+            )
+            .subquery()
+        )
+        statement = (
+            select(
+                Customer.id.label("customer_id"),
+                Customer.full_name,
+                Customer.phone,
+                Customer.address,
+                Customer.notes,
+                Customer.registered_on,
+                func.coalesce(financial_totals.c.total_debt_kurus, 0).label("total_debt_kurus"),
+                func.coalesce(financial_totals.c.total_payment_kurus, 0).label(
+                    "total_payment_kurus"
+                ),
+                func.coalesce(financial_totals.c.balance_kurus, 0).label("balance_kurus"),
+                ranked_transactions.c.transaction_date.label("last_transaction_date"),
+                ranked_transactions.c.transaction_time.label("last_transaction_time"),
+            )
+            .outerjoin(
+                financial_totals,
+                financial_totals.c.customer_id == Customer.id,
+            )
+            .outerjoin(
+                ranked_transactions,
+                and_(
+                    ranked_transactions.c.customer_id == Customer.id,
+                    ranked_transactions.c.latest_rank == 1,
+                ),
+            )
+            .where(
+                Customer.id == customer_id,
+                Customer.archived_at.is_(None),
+            )
+        )
+        row = self._session.execute(statement).one_or_none()
+        if row is None:
+            return None
+        return CustomerDetail(
+            customer_id=row.customer_id,
+            full_name=row.full_name,
+            phone=row.phone,
+            address=row.address,
+            notes=row.notes,
+            registered_on=row.registered_on,
+            total_debt_kurus=int(row.total_debt_kurus),
+            total_payment_kurus=int(row.total_payment_kurus),
+            balance_kurus=int(row.balance_kurus),
+            last_transaction_date=row.last_transaction_date,
+            last_transaction_time=row.last_transaction_time,
+        )
 
     def list_active_summaries(
         self,

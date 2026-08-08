@@ -6,6 +6,7 @@ from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -23,8 +24,13 @@ from PySide6.QtWidgets import (
 )
 
 from hesiva.composition import ApplicationContext
-from hesiva.read_models import CustomerSummary, CustomerSummarySort
-from hesiva.ui.presentation import format_balance_kurus, format_transaction_moment
+from hesiva.read_models import CustomerDetail, CustomerSummary, CustomerSummarySort
+from hesiva.ui.presentation import (
+    format_balance_kurus,
+    format_date,
+    format_money_kurus,
+    format_transaction_moment,
+)
 from hesiva.ui.theme import APPLICATION_STYLESHEET
 
 LOGGER = logging.getLogger(__name__)
@@ -117,6 +123,7 @@ class MainWindow(QMainWindow):
         self._application_context = application_context
         self._customer_summaries_by_id: dict[int, CustomerSummary] = {}
         self._selected_customer_id: int | None = None
+        self._selected_customer_detail: CustomerDetail | None = None
         self.setWindowTitle("Hesiva")
         self.setObjectName("mainWindow")
         self.setMinimumSize(MINIMUM_WINDOW_WIDTH, MINIMUM_WINDOW_HEIGHT)
@@ -306,8 +313,14 @@ class MainWindow(QMainWindow):
             parent=self.customer_detail_stack,
         )
         self.customer_detail_shell = self._create_selected_customer_shell()
+        self.customer_detail_error_state = EmptyState(
+            "Müşteri ayrıntıları yüklenemedi. Lütfen yeniden deneyin.",
+            object_name="customerDetailErrorState",
+            parent=self.customer_detail_stack,
+        )
         self.customer_detail_stack.addWidget(self.no_customer_selected_state)
         self.customer_detail_stack.addWidget(self.customer_detail_shell)
+        self.customer_detail_stack.addWidget(self.customer_detail_error_state)
         self.customer_detail_stack.setCurrentWidget(self.no_customer_selected_state)
         layout.addWidget(self.customer_detail_stack)
         return pane
@@ -368,8 +381,8 @@ class MainWindow(QMainWindow):
         self.customer_tabs = QTabWidget(shell)
         self.customer_tabs.setObjectName("customerTabs")
         self.customer_tabs.setAccessibleName("Müşteri detay sekmeleri")
+        self.customer_tabs.addTab(self._create_general_tab(), "Genel")
         for object_name, label in (
-            ("generalTab", "Genel"),
             ("animalsTab", "Hayvanlar"),
             ("accountHistoryTab", "Hesap Hareketleri"),
             ("remindersTab", "Hatırlatmalar"),
@@ -380,6 +393,153 @@ class MainWindow(QMainWindow):
             self.customer_tabs.addTab(tab, label)
         layout.addWidget(self.customer_tabs, 1)
         return shell
+
+    def _create_general_tab(self) -> QWidget:
+        tab = QWidget(self.customer_tabs)
+        tab.setObjectName("generalTab")
+        tab.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+        layout = QHBoxLayout(tab)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(16)
+
+        information_panel = QFrame(tab)
+        information_panel.setObjectName("generalInformationPanel")
+        information_panel.setProperty("detailPanel", True)
+        information_layout = QVBoxLayout(information_panel)
+        information_layout.setContentsMargins(18, 16, 18, 16)
+        information_layout.setSpacing(10)
+
+        contact_heading = QLabel("İletişim Bilgileri", information_panel)
+        contact_heading.setProperty("sectionHeading", True)
+        information_layout.addWidget(contact_heading)
+        contact_grid = QGridLayout()
+        contact_grid.setHorizontalSpacing(16)
+        contact_grid.setVerticalSpacing(8)
+        self.general_phone_value = self._create_detail_value_label(
+            information_panel,
+            "generalPhoneValue",
+        )
+        self.general_address_value = self._create_detail_value_label(
+            information_panel,
+            "generalAddressValue",
+            word_wrap=True,
+        )
+        self._add_detail_row(contact_grid, 0, "Telefon", self.general_phone_value)
+        self._add_detail_row(contact_grid, 1, "Adres", self.general_address_value)
+        information_layout.addLayout(contact_grid)
+
+        customer_heading = QLabel("Müşteri Bilgileri", information_panel)
+        customer_heading.setProperty("sectionHeading", True)
+        information_layout.addWidget(customer_heading)
+        customer_grid = QGridLayout()
+        customer_grid.setHorizontalSpacing(16)
+        customer_grid.setVerticalSpacing(8)
+        self.general_registered_on_value = self._create_detail_value_label(
+            information_panel,
+            "generalRegisteredOnValue",
+        )
+        self.general_last_transaction_value = self._create_detail_value_label(
+            information_panel,
+            "generalLastTransactionValue",
+        )
+        self._add_detail_row(
+            customer_grid,
+            0,
+            "Kayıt Tarihi",
+            self.general_registered_on_value,
+        )
+        self._add_detail_row(
+            customer_grid,
+            1,
+            "Son İşlem",
+            self.general_last_transaction_value,
+        )
+        information_layout.addLayout(customer_grid)
+
+        account_heading = QLabel("Hesap Özeti", information_panel)
+        account_heading.setProperty("sectionHeading", True)
+        information_layout.addWidget(account_heading)
+        account_grid = QGridLayout()
+        account_grid.setHorizontalSpacing(16)
+        account_grid.setVerticalSpacing(8)
+        self.general_total_debt_value = self._create_detail_value_label(
+            information_panel,
+            "generalTotalDebtValue",
+        )
+        self.general_total_debt_value.setProperty("financialValue", True)
+        self.general_total_debt_value.setProperty("balanceState", "debt")
+        self.general_total_payment_value = self._create_detail_value_label(
+            information_panel,
+            "generalTotalPaymentValue",
+        )
+        self.general_total_payment_value.setProperty("financialValue", True)
+        self.general_total_payment_value.setProperty("balanceState", "overpayment")
+        self.general_balance_value = self._create_detail_value_label(
+            information_panel,
+            "generalBalanceValue",
+        )
+        self.general_balance_value.setProperty("financialValue", True)
+        self._add_detail_row(account_grid, 0, "Toplam Borç", self.general_total_debt_value)
+        self._add_detail_row(
+            account_grid,
+            1,
+            "Toplam Ödeme",
+            self.general_total_payment_value,
+        )
+        self._add_detail_row(account_grid, 2, "Güncel Bakiye", self.general_balance_value)
+        information_layout.addLayout(account_grid)
+        information_layout.addStretch()
+        layout.addWidget(information_panel, 3)
+
+        notes_panel = QFrame(tab)
+        notes_panel.setObjectName("generalNotesPanel")
+        notes_panel.setProperty("detailPanel", True)
+        notes_layout = QVBoxLayout(notes_panel)
+        notes_layout.setContentsMargins(18, 16, 18, 16)
+        notes_layout.setSpacing(10)
+        notes_heading = QLabel("Notlar", notes_panel)
+        notes_heading.setProperty("sectionHeading", True)
+        notes_layout.addWidget(notes_heading)
+        self.general_notes_value = self._create_detail_value_label(
+            notes_panel,
+            "generalNotesValue",
+            word_wrap=True,
+        )
+        self.general_notes_value.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+        )
+        notes_layout.addWidget(self.general_notes_value, 1)
+        layout.addWidget(notes_panel, 2)
+        return tab
+
+    @staticmethod
+    def _create_detail_value_label(
+        parent: QWidget,
+        object_name: str,
+        *,
+        word_wrap: bool = False,
+    ) -> QLabel:
+        label = QLabel("-", parent)
+        label.setObjectName(object_name)
+        label.setProperty("detailValue", True)
+        label.setWordWrap(word_wrap)
+        label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        return label
+
+    @staticmethod
+    def _add_detail_row(
+        layout: QGridLayout,
+        row: int,
+        caption: str,
+        value: QLabel,
+    ) -> None:
+        caption_label = QLabel(f"{caption}:")
+        caption_label.setProperty("detailCaption", True)
+        caption_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        layout.addWidget(caption_label, row, 0)
+        layout.addWidget(value, row, 1)
+        layout.setColumnStretch(1, 1)
 
     def refresh_customer_summaries(self) -> None:
         """Reload active summaries using the current search and sort controls."""
@@ -427,7 +587,9 @@ class MainWindow(QMainWindow):
             self.customer_list_stack.setCurrentWidget(self.customer_empty_state)
 
         if selected_row is not None:
-            self._show_selected_customer(self._customer_summaries_by_id[selected_customer_id])
+            self._load_selected_customer_detail(
+                self._customer_summaries_by_id[selected_customer_id]
+            )
         else:
             self._show_no_customer_selected()
 
@@ -451,25 +613,63 @@ class MainWindow(QMainWindow):
         if summary is None:
             self._show_no_customer_selected()
             return
-        self._show_selected_customer(summary)
+        self._load_selected_customer_detail(summary)
 
-    def _show_selected_customer(self, summary: CustomerSummary) -> None:
+    def _load_selected_customer_detail(self, summary: CustomerSummary) -> None:
         self._selected_customer_id = summary.customer_id
-        self.customer_name_label.setText(summary.full_name)
-        self.balance_value_label.setText(format_balance_kurus(summary.balance_kurus))
+        self._selected_customer_detail = None
+        self._clear_customer_detail_values()
+        try:
+            with self._application_context.services() as services:
+                detail = services.customer_detail.get_customer_detail(summary.customer_id)
+        except Exception:
+            LOGGER.exception(
+                "Customer detail could not be loaded for customer %s", summary.customer_id
+            )
+            self.customer_detail_stack.setCurrentWidget(self.customer_detail_error_state)
+            return
+
+        self._selected_customer_detail = detail
+        self.customer_name_label.setText(detail.full_name)
+        phone = detail.phone or "-"
+        self.customer_phone_label.setText(f"Telefon: {phone}")
+        self.customer_phone_label.show()
+        self.balance_value_label.setText(format_balance_kurus(detail.balance_kurus))
         last_transaction = format_transaction_moment(
-            summary.last_transaction_date,
-            summary.last_transaction_time,
+            detail.last_transaction_date,
+            detail.last_transaction_time,
         )
         self.last_transaction_label.setText(f"Son İşlem: {last_transaction}")
+        self.general_phone_value.setText(phone)
+        self.general_address_value.setText(detail.address or "-")
+        self.general_registered_on_value.setText(format_date(detail.registered_on))
+        self.general_last_transaction_value.setText(last_transaction)
+        self.general_total_debt_value.setText(format_money_kurus(detail.total_debt_kurus))
+        self.general_total_payment_value.setText(format_money_kurus(detail.total_payment_kurus))
+        self.general_balance_value.setText(format_balance_kurus(detail.balance_kurus))
+        self.general_notes_value.setText(detail.notes or "-")
         self.customer_detail_stack.setCurrentWidget(self.customer_detail_shell)
 
     def _show_no_customer_selected(self) -> None:
         self._selected_customer_id = None
+        self._selected_customer_detail = None
+        self._clear_customer_detail_values()
+        self.customer_detail_stack.setCurrentWidget(self.no_customer_selected_state)
+
+    def _clear_customer_detail_values(self) -> None:
         self.customer_name_label.clear()
+        self.customer_phone_label.setText("Telefon:")
+        self.customer_phone_label.hide()
         self.balance_value_label.clear()
         self.last_transaction_label.setText("Son İşlem:")
-        self.customer_detail_stack.setCurrentWidget(self.no_customer_selected_state)
+        self.general_phone_value.setText("-")
+        self.general_address_value.setText("-")
+        self.general_registered_on_value.setText("-")
+        self.general_last_transaction_value.setText("-")
+        self.general_total_debt_value.setText("-")
+        self.general_total_payment_value.setText("-")
+        self.general_balance_value.setText("-")
+        self.general_notes_value.setText("-")
 
     def _show_customer_load_error(self) -> None:
         self._customer_summaries_by_id = {}
