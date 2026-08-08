@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from hesiva.models._timestamps import utc_now
 from hesiva.models.customer import Customer
 from hesiva.models.reminder import Reminder
+from hesiva.read_models import ReminderSummary
 from hesiva.repositories.customer_repository import CustomerRepository
 from hesiva.repositories.reminder_repository import ReminderRepository
 from hesiva.services._text import normalize_required_text
@@ -53,6 +54,23 @@ class ReminderService:
             raise ReminderNotFoundError(f"Reminder {reminder_id} was not found.")
         return reminder
 
+    def update_reminder(self, reminder_id: int, *, remind_on: date, note: str) -> Reminder:
+        reminder = self.get_reminder(reminder_id)
+        if reminder.completed_at is not None or reminder.cancelled_at is not None:
+            raise InvalidStateTransitionError("An inactive reminder cannot be edited.")
+        if type(remind_on) is not date:
+            raise ValidationError("remind_on must be a date.")
+        normalized_note = normalize_required_text(note, "note")
+
+        try:
+            reminder.remind_on = remind_on
+            reminder.note = normalized_note
+            self._session.commit()
+        except Exception:
+            self._session.rollback()
+            raise
+        return reminder
+
     def list_for_customer(
         self,
         customer_id: int,
@@ -69,6 +87,18 @@ class ReminderService:
         if type(on_or_before) is not date:
             raise ValidationError("on_or_before must be a date.")
         return self._reminder_repository.list_due(on_or_before)
+
+    def list_records_for_customer(
+        self,
+        customer_id: int,
+        *,
+        include_inactive: bool = False,
+    ) -> list[ReminderSummary]:
+        self._get_customer(customer_id)
+        return self._reminder_repository.list_summary_records(
+            customer_id,
+            include_inactive=include_inactive,
+        )
 
     def complete_reminder(self, reminder_id: int) -> Reminder:
         reminder = self.get_reminder(reminder_id)

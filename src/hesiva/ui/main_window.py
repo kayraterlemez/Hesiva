@@ -1,11 +1,13 @@
 import logging
 from collections.abc import Iterable
+from datetime import date
 
 from PySide6.QtCore import QSignalBlocker, Qt, QTimer
 from PySide6.QtGui import QAction, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
+    QCheckBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -36,9 +38,10 @@ from hesiva.read_models import (
     CustomerDetail,
     CustomerSummary,
     CustomerSummarySort,
+    ReminderSummary,
 )
 from hesiva.services import ServiceError, ValidationError
-from hesiva.ui import animal_dialogs, customer_dialogs
+from hesiva.ui import animal_dialogs, customer_dialogs, reminder_dialogs
 from hesiva.ui.animal_dialogs import (
     AnimalFormDialog,
     AnimalFormValues,
@@ -55,13 +58,18 @@ from hesiva.ui.financial_dialogs import (
     VoidTransactionDialog,
 )
 from hesiva.ui.presentation import (
+    ReminderPresentationState,
+    classify_reminder,
+    count_active_reminders_today,
     format_animal_display,
     format_animal_identity,
     format_balance_kurus,
     format_date,
     format_money_kurus,
+    format_reminder_status,
     format_transaction_moment,
 )
+from hesiva.ui.reminder_dialogs import ReminderFormDialog, ReminderFormValues
 from hesiva.ui.theme import APPLICATION_STYLESHEET
 
 LOGGER = logging.getLogger(__name__)
@@ -157,6 +165,7 @@ class MainWindow(QMainWindow):
         self._selected_customer_detail: CustomerDetail | None = None
         self._account_history_by_id: dict[int, AccountHistoryRow] = {}
         self._animal_summaries_by_id: dict[int, AnimalSummary] = {}
+        self._reminder_summaries_by_id: dict[int, ReminderSummary] = {}
         self.setWindowTitle("Hesiva")
         self.setObjectName("mainWindow")
         self.setMinimumSize(MINIMUM_WINDOW_WIDTH, MINIMUM_WINDOW_HEIGHT)
@@ -427,10 +436,7 @@ class MainWindow(QMainWindow):
         self.customer_tabs.addTab(self._create_general_tab(), "Genel")
         self.customer_tabs.addTab(self._create_animals_tab(), "Hayvanlar")
         self.customer_tabs.addTab(self._create_account_history_tab(), "Hesap Hareketleri")
-        reminders_tab = QWidget(self.customer_tabs)
-        reminders_tab.setObjectName("remindersTab")
-        reminders_tab.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.customer_tabs.addTab(reminders_tab, "Hatırlatmalar")
+        self.customer_tabs.addTab(self._create_reminders_tab(), "Hatırlatmalar")
         layout.addWidget(self.customer_tabs, 1)
         return shell
 
@@ -715,6 +721,89 @@ class MainWindow(QMainWindow):
         layout.addLayout(footer)
         return tab
 
+    def _create_reminders_tab(self) -> QWidget:
+        tab = QWidget(self.customer_tabs)
+        tab.setObjectName("remindersTab")
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(10)
+
+        actions = QHBoxLayout()
+        self.add_reminder_button = QPushButton("+ Hatırlatma Ekle", tab)
+        self.add_reminder_button.setObjectName("addReminderButton")
+        self.add_reminder_button.setProperty("primary", True)
+        self.add_reminder_button.setEnabled(False)
+        self.add_reminder_button.clicked.connect(self._open_add_reminder_dialog)
+        actions.addWidget(self.add_reminder_button)
+        self.complete_reminder_button = QPushButton("Tamamlandı", tab)
+        self.complete_reminder_button.setObjectName("completeReminderButton")
+        self.complete_reminder_button.setEnabled(False)
+        self.complete_reminder_button.clicked.connect(self._complete_selected_reminder)
+        actions.addWidget(self.complete_reminder_button)
+        self.edit_reminder_button = QPushButton("Düzenle", tab)
+        self.edit_reminder_button.setObjectName("editReminderButton")
+        self.edit_reminder_button.setEnabled(False)
+        self.edit_reminder_button.clicked.connect(self._open_edit_reminder_dialog)
+        actions.addWidget(self.edit_reminder_button)
+        self.cancel_reminder_button = QPushButton("İptal Et", tab)
+        self.cancel_reminder_button.setObjectName("cancelReminderButton")
+        self.cancel_reminder_button.setProperty("destructive", True)
+        self.cancel_reminder_button.setEnabled(False)
+        self.cancel_reminder_button.clicked.connect(self._cancel_selected_reminder)
+        actions.addWidget(self.cancel_reminder_button)
+        actions.addStretch()
+        self.show_inactive_reminders_checkbox = QCheckBox("Tamamlanmışları Göster", tab)
+        self.show_inactive_reminders_checkbox.setObjectName("showInactiveRemindersCheckbox")
+        self.show_inactive_reminders_checkbox.setToolTip(
+            "Tamamlanan ve iptal edilen hatırlatmaları da gösterir."
+        )
+        self.show_inactive_reminders_checkbox.setEnabled(False)
+        self.show_inactive_reminders_checkbox.toggled.connect(self._reminder_history_toggled)
+        actions.addWidget(self.show_inactive_reminders_checkbox)
+        layout.addLayout(actions)
+
+        self.reminder_list_stack = QStackedWidget(tab)
+        self.reminder_empty_state = EmptyState(
+            "Bu müşteriye ait aktif hatırlatma bulunmuyor.",
+            object_name="reminderListEmptyState",
+            parent=self.reminder_list_stack,
+        )
+        self.reminder_error_state = EmptyState(
+            "Hatırlatmalar yüklenemedi. Lütfen yeniden deneyin.",
+            object_name="reminderListErrorState",
+            parent=self.reminder_list_stack,
+        )
+        self.reminder_table = QTableWidget(0, 3, self.reminder_list_stack)
+        self.reminder_table.setObjectName("reminderTable")
+        self.reminder_table.setHorizontalHeaderLabels(("Tarih", "Hatırlatma Notu", "Durum"))
+        self.reminder_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.reminder_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.reminder_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.reminder_table.setAlternatingRowColors(True)
+        self.reminder_table.verticalHeader().hide()
+        reminder_header = self.reminder_table.horizontalHeader()
+        reminder_header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        reminder_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.reminder_table.itemSelectionChanged.connect(self._reminder_selection_changed)
+        self.reminder_list_stack.addWidget(self.reminder_empty_state)
+        self.reminder_list_stack.addWidget(self.reminder_table)
+        self.reminder_list_stack.addWidget(self.reminder_error_state)
+        self.reminder_list_stack.setCurrentWidget(self.reminder_empty_state)
+        layout.addWidget(self.reminder_list_stack, 1)
+
+        footer = QHBoxLayout()
+        self.reminder_count_label = QLabel("Toplam Hatırlatma: 0", tab)
+        self.reminder_count_label.setObjectName("reminderCountLabel")
+        self.reminder_count_label.setProperty("muted", True)
+        footer.addWidget(self.reminder_count_label)
+        footer.addStretch()
+        self.today_reminder_count_label = QLabel("Bugün Yapılacak: 0 Hatırlatma", tab)
+        self.today_reminder_count_label.setObjectName("todayReminderCountLabel")
+        self.today_reminder_count_label.setProperty("sectionHeading", True)
+        footer.addWidget(self.today_reminder_count_label)
+        layout.addLayout(footer)
+        return tab
+
     @staticmethod
     def _create_detail_value_label(
         parent: QWidget,
@@ -823,6 +912,7 @@ class MainWindow(QMainWindow):
         self._clear_customer_detail_values()
         self._clear_animals()
         self._clear_account_history()
+        self._clear_reminders()
         try:
             with self._application_context.services() as services:
                 detail = services.customer_detail.get_customer_detail(summary.customer_id)
@@ -855,9 +945,11 @@ class MainWindow(QMainWindow):
         self._set_customer_write_actions_enabled(True)
         self._set_financial_actions_enabled(True)
         self._set_animal_customer_actions_enabled(True)
+        self._set_reminder_customer_actions_enabled(True)
         self.customer_detail_stack.setCurrentWidget(self.customer_detail_shell)
         self.refresh_animals_for_selected_customer(detail.customer_id)
         self.refresh_account_history(detail.customer_id)
+        self.refresh_reminders_for_selected_customer(detail.customer_id)
 
     def _show_no_customer_selected(self) -> None:
         self._selected_customer_id = None
@@ -865,12 +957,14 @@ class MainWindow(QMainWindow):
         self._clear_customer_detail_values()
         self._clear_animals()
         self._clear_account_history()
+        self._clear_reminders()
         self.customer_detail_stack.setCurrentWidget(self.no_customer_selected_state)
 
     def _clear_customer_detail_values(self) -> None:
         self._set_customer_write_actions_enabled(False)
         self._set_financial_actions_enabled(False)
         self._set_animal_customer_actions_enabled(False)
+        self._set_reminder_customer_actions_enabled(False)
         self.customer_name_label.clear()
         self.customer_phone_label.setText("Telefon:")
         self.customer_phone_label.hide()
@@ -986,6 +1080,143 @@ class MainWindow(QMainWindow):
         enabled = animal is not None and self._selected_customer_detail is not None
         self.edit_animal_button.setEnabled(enabled)
         self.archive_animal_button.setEnabled(enabled)
+
+    def _set_reminder_customer_actions_enabled(self, enabled: bool) -> None:
+        self.add_reminder_button.setEnabled(enabled)
+        self.show_inactive_reminders_checkbox.setEnabled(enabled)
+        if not enabled:
+            self.edit_reminder_button.setEnabled(False)
+            self.complete_reminder_button.setEnabled(False)
+            self.cancel_reminder_button.setEnabled(False)
+
+    def refresh_reminders_for_selected_customer(
+        self,
+        customer_id: int | None = None,
+        *,
+        select_reminder_id: int | None = None,
+        reference_date: date | None = None,
+    ) -> None:
+        """Reload one customer's immutable reminder records."""
+        target_customer_id = self._selected_customer_id if customer_id is None else customer_id
+        if target_customer_id is None:
+            self._clear_reminders()
+            return
+        preserved_reminder_id = (
+            self._selected_reminder_id() if select_reminder_id is None else select_reminder_id
+        )
+        include_inactive = self.show_inactive_reminders_checkbox.isChecked()
+        try:
+            with self._application_context.services() as services:
+                reminders = services.reminder.list_records_for_customer(
+                    target_customer_id,
+                    include_inactive=include_inactive,
+                )
+        except Exception:
+            LOGGER.exception(
+                "Reminders could not be loaded for customer %s",
+                target_customer_id,
+            )
+            self._reminder_summaries_by_id = {}
+            self.reminder_table.setRowCount(0)
+            self.reminder_count_label.setText("Toplam Hatırlatma: -")
+            self.today_reminder_count_label.setText("Bugün Yapılacak: -")
+            self.reminder_list_stack.setCurrentWidget(self.reminder_error_state)
+            self._reminder_selection_changed()
+            return
+
+        self._populate_reminders(
+            reminders,
+            preserved_reminder_id,
+            reference_date=reference_date or date.today(),
+        )
+
+    def _populate_reminders(
+        self,
+        reminders: list[ReminderSummary],
+        selected_reminder_id: int | None,
+        *,
+        reference_date: date,
+    ) -> None:
+        self._reminder_summaries_by_id = {reminder.reminder_id: reminder for reminder in reminders}
+        blocker = QSignalBlocker(self.reminder_table)
+        self.reminder_table.setRowCount(len(reminders))
+        selected_row: int | None = None
+        for row, reminder in enumerate(reminders):
+            state = classify_reminder(reminder, reference_date)
+            values = (
+                format_date(reminder.remind_on),
+                reminder.note,
+                format_reminder_status(reminder, reference_date),
+            )
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if column == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, reminder.reminder_id)
+                if state is ReminderPresentationState.OVERDUE:
+                    item.setBackground(QColor("#fff4d6"))
+                elif state is ReminderPresentationState.TODAY:
+                    item.setBackground(QColor("#e5effa"))
+                elif state in (
+                    ReminderPresentationState.COMPLETED,
+                    ReminderPresentationState.CANCELLED,
+                ):
+                    item.setBackground(QColor("#eef1f4"))
+                    item.setForeground(QColor("#6f7a85"))
+                self.reminder_table.setItem(row, column, item)
+            if reminder.reminder_id == selected_reminder_id:
+                selected_row = row
+        if selected_row is not None:
+            self.reminder_table.selectRow(selected_row)
+        del blocker
+
+        self.reminder_count_label.setText(f"Toplam Hatırlatma: {len(reminders)}")
+        today_count = count_active_reminders_today(reminders, reference_date)
+        self.today_reminder_count_label.setText(f"Bugün Yapılacak: {today_count} Hatırlatma")
+        if reminders:
+            self.reminder_list_stack.setCurrentWidget(self.reminder_table)
+        else:
+            message = (
+                "Gösterilecek hatırlatma bulunmuyor."
+                if self.show_inactive_reminders_checkbox.isChecked()
+                else "Bu müşteriye ait aktif hatırlatma bulunmuyor."
+            )
+            self.reminder_empty_state.set_message(message)
+            self.reminder_list_stack.setCurrentWidget(self.reminder_empty_state)
+        self._reminder_selection_changed()
+
+    def _clear_reminders(self) -> None:
+        self._reminder_summaries_by_id = {}
+        self.reminder_table.setRowCount(0)
+        self.reminder_count_label.setText("Toplam Hatırlatma: 0")
+        self.today_reminder_count_label.setText("Bugün Yapılacak: 0 Hatırlatma")
+        self.reminder_empty_state.set_message("Bu müşteriye ait aktif hatırlatma bulunmuyor.")
+        self.reminder_list_stack.setCurrentWidget(self.reminder_empty_state)
+        self.edit_reminder_button.setEnabled(False)
+        self.complete_reminder_button.setEnabled(False)
+        self.cancel_reminder_button.setEnabled(False)
+
+    def _selected_reminder_id(self) -> int | None:
+        selected_rows = self.reminder_table.selectionModel().selectedRows()
+        if not selected_rows:
+            return None
+        item = self.reminder_table.item(selected_rows[0].row(), 0)
+        return None if item is None else item.data(Qt.ItemDataRole.UserRole)
+
+    def _reminder_selection_changed(self) -> None:
+        reminder = self._reminder_summaries_by_id.get(self._selected_reminder_id())
+        active = (
+            reminder is not None
+            and reminder.completed_at is None
+            and reminder.cancelled_at is None
+            and self._selected_customer_detail is not None
+        )
+        self.edit_reminder_button.setEnabled(active)
+        self.complete_reminder_button.setEnabled(active)
+        self.cancel_reminder_button.setEnabled(active)
+
+    def _reminder_history_toggled(self, _checked: bool) -> None:
+        if self._selected_customer_detail is not None:
+            self.refresh_reminders_for_selected_customer()
 
     def refresh_account_history(self, customer_id: int | None = None) -> None:
         """Reload the selected customer's plain financial-history rows."""
@@ -1371,6 +1602,156 @@ class MainWindow(QMainWindow):
             return services.animal.list_archived_records(customer_id)
 
     def _show_animal_operation_error(self, message: str) -> None:
+        QMessageBox.warning(self, "İşlem Tamamlanamadı", message)
+
+    def _open_add_reminder_dialog(self) -> None:
+        detail = self._selected_customer_detail
+        if detail is None or detail.customer_id != self._selected_customer_id:
+            return
+        dialog = ReminderFormDialog("Yeni Hatırlatma", parent=self)
+        created_reminder_id: int | None = None
+
+        def create_reminder() -> None:
+            nonlocal created_reminder_id
+            values = dialog.values()
+            try:
+                with self._application_context.services() as services:
+                    reminder = services.reminder.create_reminder(
+                        detail.customer_id,
+                        values.remind_on,
+                        values.note,
+                    )
+                    created_reminder_id = reminder.id
+            except ServiceError:
+                dialog.show_error("Hatırlatma kaydedilemedi. Lütfen alanları kontrol edin.")
+            except Exception:
+                LOGGER.exception("Reminder could not be created")
+                dialog.show_error("Hatırlatma kaydedilemedi. Lütfen yeniden deneyin.")
+            else:
+                dialog.accept()
+
+        dialog.save_requested.connect(create_reminder)
+        dialog.exec()
+        dialog.save_requested.disconnect(create_reminder)
+        dialog.deleteLater()
+        if created_reminder_id is not None:
+            self.refresh_reminders_for_selected_customer(
+                detail.customer_id,
+                select_reminder_id=created_reminder_id,
+            )
+
+    def _open_edit_reminder_dialog(self) -> None:
+        reminder_id = self._selected_reminder_id()
+        reminder = self._reminder_summaries_by_id.get(reminder_id)
+        if (
+            reminder is None
+            or reminder.completed_at is not None
+            or reminder.cancelled_at is not None
+        ):
+            return
+        dialog = ReminderFormDialog(
+            "Hatırlatmayı Düzenle",
+            initial_values=ReminderFormValues(
+                remind_on=reminder.remind_on,
+                note=reminder.note,
+            ),
+            parent=self,
+        )
+        updated = False
+
+        def update_reminder() -> None:
+            nonlocal updated
+            values = dialog.values()
+            try:
+                with self._application_context.services() as services:
+                    services.reminder.update_reminder(
+                        reminder.reminder_id,
+                        remind_on=values.remind_on,
+                        note=values.note,
+                    )
+            except ServiceError:
+                dialog.show_error("Hatırlatma güncellenemedi. Lütfen alanları kontrol edin.")
+            except Exception:
+                LOGGER.exception(
+                    "Reminder %s could not be updated",
+                    reminder.reminder_id,
+                )
+                dialog.show_error("Hatırlatma güncellenemedi. Lütfen yeniden deneyin.")
+            else:
+                updated = True
+                dialog.accept()
+
+        dialog.save_requested.connect(update_reminder)
+        dialog.exec()
+        dialog.save_requested.disconnect(update_reminder)
+        dialog.deleteLater()
+        if updated:
+            self.refresh_reminders_for_selected_customer(
+                reminder.customer_id,
+                select_reminder_id=reminder.reminder_id,
+            )
+
+    def _complete_selected_reminder(self) -> None:
+        reminder = self._reminder_summaries_by_id.get(self._selected_reminder_id())
+        if (
+            reminder is None
+            or reminder.completed_at is not None
+            or reminder.cancelled_at is not None
+        ):
+            return
+        if not reminder_dialogs.confirm_reminder_completion(self, reminder):
+            return
+        try:
+            with self._application_context.services() as services:
+                services.reminder.complete_reminder(reminder.reminder_id)
+        except ServiceError:
+            self._show_reminder_operation_error("Hatırlatma tamamlanamadı. Lütfen yeniden deneyin.")
+            return
+        except Exception:
+            LOGGER.exception(
+                "Reminder %s could not be completed",
+                reminder.reminder_id,
+            )
+            self._show_reminder_operation_error("Hatırlatma tamamlanamadı. Lütfen yeniden deneyin.")
+            return
+        self.refresh_reminders_for_selected_customer(
+            reminder.customer_id,
+            select_reminder_id=reminder.reminder_id,
+        )
+
+    def _cancel_selected_reminder(self) -> None:
+        reminder = self._reminder_summaries_by_id.get(self._selected_reminder_id())
+        if (
+            reminder is None
+            or reminder.completed_at is not None
+            or reminder.cancelled_at is not None
+        ):
+            return
+        if not reminder_dialogs.confirm_reminder_cancellation(self, reminder):
+            return
+        try:
+            with self._application_context.services() as services:
+                services.reminder.cancel_reminder(reminder.reminder_id)
+        except ServiceError:
+            self._show_reminder_operation_error(
+                "Hatırlatma iptal edilemedi. Lütfen yeniden deneyin."
+            )
+            return
+        except Exception:
+            LOGGER.exception(
+                "Reminder %s could not be cancelled",
+                reminder.reminder_id,
+            )
+            self._show_reminder_operation_error(
+                "Hatırlatma iptal edilemedi. Lütfen yeniden deneyin."
+            )
+            return
+        self.refresh_reminders_for_selected_customer(
+            reminder.customer_id,
+            select_reminder_id=reminder.reminder_id,
+        )
+
+    def _show_reminder_operation_error(self, message: str) -> None:
         QMessageBox.warning(self, "İşlem Tamamlanamadı", message)
 
     def _open_debt_transaction_dialog(self) -> None:

@@ -77,6 +77,18 @@ class AnimalSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class ReminderSummary:
+    """Immutable reminder data used by active and inactive customer workflows."""
+
+    reminder_id: int
+    customer_id: int
+    remind_on: date
+    note: str
+    completed_at: datetime | None
+    cancelled_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
 class AccountHistoryRow:
     """One immutable financial-history row with its chronological running balance."""
 

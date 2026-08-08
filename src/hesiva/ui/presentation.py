@@ -1,11 +1,25 @@
 """Small deterministic formatters for Hesiva UI values."""
 
 import re
+from collections.abc import Iterable
 from datetime import date, time
+from enum import StrEnum
+
+from hesiva.read_models import ReminderSummary
 
 
 class MoneyInputError(ValueError):
     """Raised when a Turkish-formatted positive money magnitude is invalid."""
+
+
+class ReminderPresentationState(StrEnum):
+    """Non-persisted UI states derived from reminder dates and lifecycle timestamps."""
+
+    OVERDUE = "overdue"
+    TODAY = "today"
+    UPCOMING = "upcoming"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
 
 
 def parse_money_kurus(value: str) -> int:
@@ -85,6 +99,48 @@ def format_animal_identity(
     if ear_tag and name:
         return f"{ear_tag} — {name}"
     return name or ear_tag or species or "Adsız hayvan"
+
+
+def classify_reminder(
+    reminder: ReminderSummary,
+    reference_date: date,
+) -> ReminderPresentationState:
+    """Classify a reminder for display without changing its stored lifecycle."""
+    if reminder.completed_at is not None:
+        return ReminderPresentationState.COMPLETED
+    if reminder.cancelled_at is not None:
+        return ReminderPresentationState.CANCELLED
+    if reminder.remind_on < reference_date:
+        return ReminderPresentationState.OVERDUE
+    if reminder.remind_on == reference_date:
+        return ReminderPresentationState.TODAY
+    return ReminderPresentationState.UPCOMING
+
+
+def format_reminder_status(reminder: ReminderSummary, reference_date: date) -> str:
+    """Format the derived reminder state using the frozen Turkish UI terminology."""
+    state = classify_reminder(reminder, reference_date)
+    if state is ReminderPresentationState.OVERDUE:
+        return "Gecikti"
+    if state is ReminderPresentationState.TODAY:
+        return "Bugün"
+    if state is ReminderPresentationState.COMPLETED:
+        return "Tamamlandı"
+    if state is ReminderPresentationState.CANCELLED:
+        return "İptal Edildi"
+    days_remaining = (reminder.remind_on - reference_date).days
+    return f"{days_remaining} gün kaldı"
+
+
+def count_active_reminders_today(
+    reminders: Iterable[ReminderSummary],
+    reference_date: date,
+) -> int:
+    """Count active reminders due on the supplied local calendar date."""
+    return sum(
+        classify_reminder(reminder, reference_date) is ReminderPresentationState.TODAY
+        for reminder in reminders
+    )
 
 
 def format_transaction_moment(
