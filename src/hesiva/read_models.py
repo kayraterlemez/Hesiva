@@ -41,3 +41,13 @@ class CustomerDetail:
     balance_kurus: int
     last_transaction_date: date | None
     last_transaction_time: time | None
+
+
+@dataclass(frozen=True, slots=True)
+class ArchivedCustomer:
+    """Immutable identifying data for the archived-customer workflow."""
+
+    customer_id: int
+    full_name: str
+    phone: str | None
+    registered_on: date | None

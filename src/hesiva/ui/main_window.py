@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMenu,
+    QMessageBox,
     QPushButton,
     QSizePolicy,
     QSplitter,
@@ -24,7 +25,19 @@ from PySide6.QtWidgets import (
 )
 
 from hesiva.composition import ApplicationContext
-from hesiva.read_models import CustomerDetail, CustomerSummary, CustomerSummarySort
+from hesiva.read_models import (
+    ArchivedCustomer,
+    CustomerDetail,
+    CustomerSummary,
+    CustomerSummarySort,
+)
+from hesiva.services import ServiceError, ValidationError
+from hesiva.ui import customer_dialogs
+from hesiva.ui.customer_dialogs import (
+    ArchivedCustomersDialog,
+    CustomerFormDialog,
+    CustomerFormValues,
+)
 from hesiva.ui.presentation import (
     format_balance_kurus,
     format_date,
@@ -157,9 +170,16 @@ class MainWindow(QMainWindow):
         file_menu.addAction(exit_action)
 
         operations_menu = self.menuBar().addMenu("İşlemler")
+        self.new_customer_action = QAction("Yeni Müşteri", self)
+        self.new_customer_action.triggered.connect(self._open_new_customer_dialog)
+        operations_menu.addAction(self.new_customer_action)
+        self.archived_customers_action = QAction("Arşivlenmiş Müşteriler", self)
+        self.archived_customers_action.triggered.connect(self._open_archived_customers_dialog)
+        operations_menu.addAction(self.archived_customers_action)
+        operations_menu.addSeparator()
         self._add_disabled_actions(
             operations_menu,
-            ("Yeni Müşteri", "Yeni İşlem", "Ödeme Al"),
+            ("Yeni İşlem", "Ödeme Al"),
         )
 
         report_menu = self.menuBar().addMenu("Rapor")
@@ -289,8 +309,7 @@ class MainWindow(QMainWindow):
         self.new_customer_button = QPushButton("+ Yeni Müşteri", pane)
         self.new_customer_button.setObjectName("newCustomerButton")
         self.new_customer_button.setProperty("primary", True)
-        self.new_customer_button.setEnabled(False)
-        self.new_customer_button.setToolTip("Müşteri oluşturma iş akışı henüz bağlı değil.")
+        self.new_customer_button.clicked.connect(self._open_new_customer_dialog)
         footer.addWidget(self.new_customer_button)
         layout.addLayout(footer)
         return pane
@@ -399,9 +418,11 @@ class MainWindow(QMainWindow):
         tab.setObjectName("generalTab")
         tab.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
-        layout = QHBoxLayout(tab)
+        layout = QVBoxLayout(tab)
         layout.setContentsMargins(18, 18, 18, 18)
         layout.setSpacing(16)
+        content_layout = QHBoxLayout()
+        content_layout.setSpacing(16)
 
         information_panel = QFrame(tab)
         information_panel.setObjectName("generalInformationPanel")
@@ -490,7 +511,7 @@ class MainWindow(QMainWindow):
         self._add_detail_row(account_grid, 2, "Güncel Bakiye", self.general_balance_value)
         information_layout.addLayout(account_grid)
         information_layout.addStretch()
-        layout.addWidget(information_panel, 3)
+        content_layout.addWidget(information_panel, 3)
 
         notes_panel = QFrame(tab)
         notes_panel.setObjectName("generalNotesPanel")
@@ -510,7 +531,23 @@ class MainWindow(QMainWindow):
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
         )
         notes_layout.addWidget(self.general_notes_value, 1)
-        layout.addWidget(notes_panel, 2)
+        content_layout.addWidget(notes_panel, 2)
+        layout.addLayout(content_layout, 1)
+
+        actions_layout = QHBoxLayout()
+        self.archive_customer_button = QPushButton("Müşteriyi Arşivle", tab)
+        self.archive_customer_button.setObjectName("archiveCustomerButton")
+        self.archive_customer_button.setProperty("archiveAction", True)
+        self.archive_customer_button.setEnabled(False)
+        self.archive_customer_button.clicked.connect(self._archive_selected_customer)
+        actions_layout.addWidget(self.archive_customer_button)
+        actions_layout.addStretch()
+        self.edit_customer_button = QPushButton("Müşteriyi Düzenle", tab)
+        self.edit_customer_button.setObjectName("editCustomerButton")
+        self.edit_customer_button.setEnabled(False)
+        self.edit_customer_button.clicked.connect(self._open_edit_customer_dialog)
+        actions_layout.addWidget(self.edit_customer_button)
+        layout.addLayout(actions_layout)
         return tab
 
     @staticmethod
@@ -648,6 +685,7 @@ class MainWindow(QMainWindow):
         self.general_total_payment_value.setText(format_money_kurus(detail.total_payment_kurus))
         self.general_balance_value.setText(format_balance_kurus(detail.balance_kurus))
         self.general_notes_value.setText(detail.notes or "-")
+        self._set_customer_write_actions_enabled(True)
         self.customer_detail_stack.setCurrentWidget(self.customer_detail_shell)
 
     def _show_no_customer_selected(self) -> None:
@@ -657,6 +695,7 @@ class MainWindow(QMainWindow):
         self.customer_detail_stack.setCurrentWidget(self.no_customer_selected_state)
 
     def _clear_customer_detail_values(self) -> None:
+        self._set_customer_write_actions_enabled(False)
         self.customer_name_label.clear()
         self.customer_phone_label.setText("Telefon:")
         self.customer_phone_label.hide()
@@ -670,6 +709,176 @@ class MainWindow(QMainWindow):
         self.general_total_payment_value.setText("-")
         self.general_balance_value.setText("-")
         self.general_notes_value.setText("-")
+
+    def _set_customer_write_actions_enabled(self, enabled: bool) -> None:
+        self.edit_customer_button.setEnabled(enabled)
+        self.archive_customer_button.setEnabled(enabled)
+
+    def _open_new_customer_dialog(self) -> None:
+        dialog = CustomerFormDialog("Yeni Müşteri", parent=self)
+        created_customer_id: int | None = None
+
+        def create_customer() -> None:
+            nonlocal created_customer_id
+            values = dialog.values()
+            try:
+                with self._application_context.services() as services:
+                    customer = services.customer.create_customer(
+                        values.full_name,
+                        phone=values.phone,
+                        address=values.address,
+                        notes=values.notes,
+                        registered_on=None,
+                    )
+                    created_customer_id = customer.id
+            except ValidationError:
+                dialog.show_error("Lütfen gerekli alanları doğru şekilde doldurun.")
+            except ServiceError:
+                dialog.show_error("Müşteri kaydedilemedi. Lütfen yeniden deneyin.")
+            except Exception:
+                LOGGER.exception("Customer could not be created")
+                dialog.show_error("Müşteri kaydedilemedi. Lütfen yeniden deneyin.")
+            else:
+                dialog.accept()
+
+        dialog.save_requested.connect(create_customer)
+        dialog.exec()
+        dialog.save_requested.disconnect(create_customer)
+        dialog.deleteLater()
+        if created_customer_id is not None:
+            self._selected_customer_id = created_customer_id
+            self.refresh_customer_summaries()
+
+    def _open_edit_customer_dialog(self) -> None:
+        detail = self._get_selected_customer_detail_for_edit()
+        if detail is None:
+            return
+
+        dialog = CustomerFormDialog(
+            "Müşteriyi Düzenle",
+            initial_values=CustomerFormValues(
+                full_name=detail.full_name,
+                phone=detail.phone or "",
+                address=detail.address or "",
+                notes=detail.notes or "",
+            ),
+            parent=self,
+        )
+        updated = False
+
+        def update_customer() -> None:
+            nonlocal updated
+            values = dialog.values()
+            try:
+                with self._application_context.services() as services:
+                    services.customer.update_customer(
+                        detail.customer_id,
+                        full_name=values.full_name,
+                        phone=values.phone,
+                        address=values.address,
+                        notes=values.notes,
+                        registered_on=detail.registered_on,
+                    )
+            except ValidationError:
+                dialog.show_error("Lütfen gerekli alanları doğru şekilde doldurun.")
+            except ServiceError:
+                dialog.show_error("Müşteri güncellenemedi. Lütfen yeniden deneyin.")
+            except Exception:
+                LOGGER.exception("Customer %s could not be updated", detail.customer_id)
+                dialog.show_error("Müşteri güncellenemedi. Lütfen yeniden deneyin.")
+            else:
+                updated = True
+                dialog.accept()
+
+        dialog.save_requested.connect(update_customer)
+        dialog.exec()
+        dialog.save_requested.disconnect(update_customer)
+        dialog.deleteLater()
+        if updated:
+            self._selected_customer_id = detail.customer_id
+            self.refresh_customer_summaries()
+
+    def _get_selected_customer_detail_for_edit(self) -> CustomerDetail | None:
+        customer_id = self._selected_customer_id
+        if customer_id is None:
+            return None
+        detail = self._selected_customer_detail
+        if detail is not None and detail.customer_id == customer_id:
+            return detail
+
+        try:
+            with self._application_context.services() as services:
+                return services.customer_detail.get_customer_detail(customer_id)
+        except ServiceError:
+            self._show_customer_operation_error(
+                "Müşteri bilgileri yüklenemedi. Lütfen yeniden deneyin."
+            )
+        except Exception:
+            LOGGER.exception("Customer %s could not be loaded for editing", customer_id)
+            self._show_customer_operation_error(
+                "Müşteri bilgileri yüklenemedi. Lütfen yeniden deneyin."
+            )
+        return None
+
+    def _archive_selected_customer(self) -> None:
+        detail = self._selected_customer_detail
+        if detail is None or detail.customer_id != self._selected_customer_id:
+            return
+        if not customer_dialogs.confirm_customer_archive(self, detail.full_name):
+            return
+
+        try:
+            with self._application_context.services() as services:
+                services.customer.archive_customer(detail.customer_id)
+        except ServiceError:
+            self._show_customer_operation_error("Müşteri arşivlenemedi. Lütfen yeniden deneyin.")
+            return
+        except Exception:
+            LOGGER.exception("Customer %s could not be archived", detail.customer_id)
+            self._show_customer_operation_error("Müşteri arşivlenemedi. Lütfen yeniden deneyin.")
+            return
+
+        self.refresh_customer_summaries()
+
+    def _open_archived_customers_dialog(self) -> None:
+        dialog = ArchivedCustomersDialog(self)
+        try:
+            dialog.set_customers(self._load_archived_customers())
+        except Exception:
+            LOGGER.exception("Archived customers could not be loaded")
+            dialog.set_customers([])
+            dialog.show_error("Arşivlenmiş müşteriler yüklenemedi.")
+
+        def unarchive_customer(customer_id: int) -> None:
+            try:
+                with self._application_context.services() as services:
+                    services.customer.unarchive_customer(customer_id)
+            except ServiceError:
+                dialog.show_error("Müşteri geri açılamadı. Lütfen yeniden deneyin.")
+                return
+            except Exception:
+                LOGGER.exception("Customer %s could not be unarchived", customer_id)
+                dialog.show_error("Müşteri geri açılamadı. Lütfen yeniden deneyin.")
+                return
+
+            self.refresh_customer_summaries()
+            try:
+                dialog.set_customers(self._load_archived_customers())
+            except Exception:
+                LOGGER.exception("Archived customers could not be refreshed")
+                dialog.show_error("Arşivlenmiş müşteri listesi yenilenemedi.")
+
+        dialog.unarchive_requested.connect(unarchive_customer)
+        dialog.exec()
+        dialog.unarchive_requested.disconnect(unarchive_customer)
+        dialog.deleteLater()
+
+    def _load_archived_customers(self) -> list[ArchivedCustomer]:
+        with self._application_context.services() as services:
+            return list(services.customer.list_archived_customers())
+
+    def _show_customer_operation_error(self, message: str) -> None:
+        QMessageBox.warning(self, "İşlem Tamamlanamadı", message)
 
     def _show_customer_load_error(self) -> None:
         self._customer_summaries_by_id = {}

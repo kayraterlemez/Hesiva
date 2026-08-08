@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from hesiva.models._timestamps import utc_now
 from hesiva.models.customer import Customer
+from hesiva.read_models import ArchivedCustomer
 from hesiva.repositories.customer_repository import CustomerRepository
 from hesiva.services._text import normalize_optional_text, normalize_required_text
 from hesiva.services.exceptions import CustomerNotFoundError
@@ -104,3 +105,6 @@ class CustomerService:
 
     def list_active_customers(self) -> list[Customer]:
         return self._customer_repository.list_active()
+
+    def list_archived_customers(self) -> list[ArchivedCustomer]:
+        return self._customer_repository.list_archived_records()

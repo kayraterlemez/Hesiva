@@ -3,7 +3,12 @@ from sqlalchemy.orm import Session
 
 from hesiva.models.customer import Customer
 from hesiva.models.transaction import Transaction
-from hesiva.read_models import CustomerDetail, CustomerSummary, CustomerSummarySort
+from hesiva.read_models import (
+    ArchivedCustomer,
+    CustomerDetail,
+    CustomerSummary,
+    CustomerSummarySort,
+)
 
 
 class CustomerRepository:
@@ -48,6 +53,27 @@ class CustomerRepository:
             .order_by(Customer.full_name, Customer.id)
         )
         return list(self._session.scalars(statement).all())
+
+    def list_archived_records(self) -> list[ArchivedCustomer]:
+        statement = (
+            select(
+                Customer.id.label("customer_id"),
+                Customer.full_name,
+                Customer.phone,
+                Customer.registered_on,
+            )
+            .where(Customer.archived_at.is_not(None))
+            .order_by(Customer.full_name, Customer.id)
+        )
+        return [
+            ArchivedCustomer(
+                customer_id=row.customer_id,
+                full_name=row.full_name,
+                phone=row.phone,
+                registered_on=row.registered_on,
+            )
+            for row in self._session.execute(statement)
+        ]
 
     def get_active_detail(self, customer_id: int) -> CustomerDetail | None:
         financial_totals = (
