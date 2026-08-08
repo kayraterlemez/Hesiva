@@ -104,3 +104,63 @@ class AccountHistoryRow:
     running_balance_kurus: int
     voided_at: datetime | None
     void_reason: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class StatementRow:
+    """One active customer-statement movement with its lifetime running balance."""
+
+    transaction_id: int
+    transaction_date: date
+    transaction_time: time | None
+    description: str
+    amount_kurus: int
+    running_balance_kurus: int
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerStatement:
+    """Immutable date-ranged statement for one active customer."""
+
+    customer_id: int
+    full_name: str
+    phone: str | None
+    period_start: date
+    period_end: date
+    opening_balance_kurus: int
+    total_debt_kurus: int
+    total_payment_kurus: int
+    current_balance_kurus: int
+    rows: tuple[StatementRow, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class MonthlySummary:
+    """Application-wide active financial totals for one calendar month."""
+
+    year: int
+    month: int
+    debt_kurus: int
+    payment_kurus: int
+    net_kurus: int
+
+
+@dataclass(frozen=True, slots=True)
+class YearlyMonthSummary:
+    """One calendar month's active totals in a yearly report."""
+
+    month: int
+    debt_kurus: int
+    payment_kurus: int
+    net_kurus: int
+
+
+@dataclass(frozen=True, slots=True)
+class YearlySummary:
+    """Application-wide yearly totals and deterministic January-December rows."""
+
+    year: int
+    debt_kurus: int
+    payment_kurus: int
+    net_kurus: int
+    months: tuple[YearlyMonthSummary, ...]

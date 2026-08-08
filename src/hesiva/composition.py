@@ -12,6 +12,7 @@ from hesiva.repositories import (
     AnimalRepository,
     CustomerRepository,
     ReminderRepository,
+    ReportRepository,
     TransactionRepository,
 )
 from hesiva.services import (
@@ -21,6 +22,7 @@ from hesiva.services import (
     CustomerService,
     CustomerSummaryService,
     ReminderService,
+    ReportService,
     TransactionService,
 )
 
@@ -36,6 +38,7 @@ class ServiceSet:
     animal: AnimalService
     transaction: TransactionService
     reminder: ReminderService
+    report: ReportService
 
 
 @dataclass
@@ -54,6 +57,7 @@ class ApplicationContext:
             animal_repository = AnimalRepository(session)
             transaction_repository = TransactionRepository(session)
             reminder_repository = ReminderRepository(session)
+            report_repository = ReportRepository(session)
 
             yield ServiceSet(
                 account_history=AccountHistoryService(transaction_repository),
@@ -68,6 +72,7 @@ class ApplicationContext:
                     animal_repository,
                 ),
                 reminder=ReminderService(session, reminder_repository, customer_repository),
+                report=ReportService(report_repository),
             )
 
     def close(self) -> None:

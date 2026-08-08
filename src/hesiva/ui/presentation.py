@@ -69,6 +69,13 @@ def format_balance_kurus(balance_kurus: int) -> str:
     return amount
 
 
+def format_signed_money_kurus(amount_kurus: int) -> str:
+    """Format a signed movement without applying balance-state terminology."""
+    if amount_kurus < 0:
+        return f"-{format_money_kurus(-amount_kurus)}"
+    return format_money_kurus(amount_kurus)
+
+
 def format_date(value: date | None) -> str:
     """Format an optional date using the Turkish desktop convention."""
     if value is None:

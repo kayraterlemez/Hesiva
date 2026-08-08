@@ -14,6 +14,7 @@ from hesiva.services.exceptions import (
     ValidationError,
 )
 from hesiva.services.reminder_service import ReminderService
+from hesiva.services.report_service import ReportService
 from hesiva.services.transaction_service import TransactionService
 
 __all__ = [
@@ -28,6 +29,7 @@ __all__ = [
     "InvalidStateTransitionError",
     "ReminderNotFoundError",
     "ReminderService",
+    "ReportService",
     "ServiceError",
     "TransactionNotFoundError",
     "TransactionService",

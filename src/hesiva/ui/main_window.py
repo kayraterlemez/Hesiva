@@ -70,6 +70,11 @@ from hesiva.ui.presentation import (
     format_transaction_moment,
 )
 from hesiva.ui.reminder_dialogs import ReminderFormDialog, ReminderFormValues
+from hesiva.ui.report_dialogs import (
+    CustomerStatementDialog,
+    MonthlySummaryDialog,
+    YearlySummaryDialog,
+)
 from hesiva.ui.theme import APPLICATION_STYLESHEET
 
 LOGGER = logging.getLogger(__name__)
@@ -216,10 +221,16 @@ class MainWindow(QMainWindow):
         operations_menu.addAction(self.receive_payment_action)
 
         report_menu = self.menuBar().addMenu("Rapor")
-        self._add_disabled_actions(
-            report_menu,
-            ("Hesap Özeti", "Aylık Özet", "Yıllık Özet"),
-        )
+        self.customer_statement_action = QAction("Hesap Özeti", self)
+        self.customer_statement_action.setEnabled(False)
+        self.customer_statement_action.triggered.connect(self._open_customer_statement)
+        report_menu.addAction(self.customer_statement_action)
+        self.monthly_summary_action = QAction("Aylık Özet", self)
+        self.monthly_summary_action.triggered.connect(self._open_monthly_summary)
+        report_menu.addAction(self.monthly_summary_action)
+        self.yearly_summary_action = QAction("Yıllık Özet", self)
+        self.yearly_summary_action.triggered.connect(self._open_yearly_summary)
+        report_menu.addAction(self.yearly_summary_action)
 
         settings_menu = self.menuBar().addMenu("Ayarlar")
         self._add_disabled_actions(settings_menu, ("Ayarlar",))
@@ -946,6 +957,7 @@ class MainWindow(QMainWindow):
         self._set_financial_actions_enabled(True)
         self._set_animal_customer_actions_enabled(True)
         self._set_reminder_customer_actions_enabled(True)
+        self._set_report_actions_enabled(True)
         self.customer_detail_stack.setCurrentWidget(self.customer_detail_shell)
         self.refresh_animals_for_selected_customer(detail.customer_id)
         self.refresh_account_history(detail.customer_id)
@@ -965,6 +977,7 @@ class MainWindow(QMainWindow):
         self._set_financial_actions_enabled(False)
         self._set_animal_customer_actions_enabled(False)
         self._set_reminder_customer_actions_enabled(False)
+        self._set_report_actions_enabled(False)
         self.customer_name_label.clear()
         self.customer_phone_label.setText("Telefon:")
         self.customer_phone_label.hide()
@@ -990,6 +1003,9 @@ class MainWindow(QMainWindow):
         self.receive_payment_button.setEnabled(enabled)
         if not enabled:
             self.void_transaction_button.setEnabled(False)
+
+    def _set_report_actions_enabled(self, enabled: bool) -> None:
+        self.customer_statement_action.setEnabled(enabled)
 
     def _set_animal_customer_actions_enabled(self, enabled: bool) -> None:
         self.add_animal_button.setEnabled(enabled)
@@ -1878,6 +1894,24 @@ class MainWindow(QMainWindow):
 
     def _show_financial_operation_error(self, message: str) -> None:
         QMessageBox.warning(self, "İşlem Tamamlanamadı", message)
+
+    def _open_customer_statement(self) -> None:
+        customer_id = self._selected_customer_id
+        if customer_id is None or self._selected_customer_detail is None:
+            return
+        dialog = CustomerStatementDialog(self._application_context, customer_id, self)
+        dialog.exec()
+        dialog.deleteLater()
+
+    def _open_monthly_summary(self) -> None:
+        dialog = MonthlySummaryDialog(self._application_context, self)
+        dialog.exec()
+        dialog.deleteLater()
+
+    def _open_yearly_summary(self) -> None:
+        dialog = YearlySummaryDialog(self._application_context, self)
+        dialog.exec()
+        dialog.deleteLater()
 
     def _open_archived_customers_dialog(self) -> None:
         dialog = ArchivedCustomersDialog(self)
