@@ -233,6 +233,10 @@ Expected result:
 
 The application can create verified backups and successfully restore them without relying on raw copies of an active SQLite database.
 
+The manual V1 workflow uses verified ZIP archives containing an Online Backup API database
+snapshot and performs atomic replacement with a pre-restore safety backup. Automatic scheduling
+and retention remain separate follow-up work within this phase.
+
 ---
 
 # Phase 8 — Legacy Data Import

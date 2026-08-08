@@ -145,6 +145,12 @@ Temporary WAL, SHM, cache, log, or build files are not part of the archive.
 
 Version 1 uses a single ZIP archive for portability and inspection.
 
+The implemented archive is stored without an additional compression policy and contains exactly
+`database.sqlite`, `config.json`, and `metadata.json`. The database member is produced with
+SQLite's Online Backup API, not by copying the active `hesiva.db` file. Metadata records the
+backup format, Hesiva version, current Alembic revision, creation time, database size, and a
+SHA-256 checksum.
+
 Example filename:
 
 ```text
@@ -238,6 +244,17 @@ Verify restored database
 ```
 
 The current database must not be destroyed before the selected replacement has passed validation.
+
+The current Version 1 restore accepts only a verified archive whose contained database is already
+at the Alembic head bundled with the running Hesiva version. Older and unknown revisions are
+rejected; restore does not silently migrate them. Before replacement, Hesiva creates and preserves
+a verified safety archive in the local `backups` directory. After atomic replacement, the
+application context is rebuilt and database-derived Main Window state is cleared and reloaded in
+process.
+
+The selected archive remains source-only. If the restored database cannot be reopened, Hesiva
+automatically rolls the live path back from the safety archive. A rollback failure is reported as a
+severe recovery error and the safety archive is retained.
 
 ---
 

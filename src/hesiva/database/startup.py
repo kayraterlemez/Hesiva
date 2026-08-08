@@ -13,6 +13,7 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy.engine import URL
 
+from hesiva.database.durability import sync_parent_directory
 from hesiva.models import model_metadata
 
 MIGRATION_DIRECTORY = Path(__file__).resolve().parent / "migrations"
@@ -270,28 +271,12 @@ def _publish_without_replacement(temporary_path: Path, final_path: Path) -> None
 
 
 def _sync_parent_directory(database_path: Path) -> None:
-    if os.name != "posix":
-        return
-
-    open_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
     try:
-        directory_descriptor = os.open(database_path.parent, open_flags)
-    except OSError as error:
-        raise DatabaseInitializationError(
-            "The database was published, but its parent directory could not be opened for sync."
-        ) from error
-
-    try:
-        os.fsync(directory_descriptor)
+        sync_parent_directory(database_path)
     except OSError as error:
         raise DatabaseInitializationError(
             "The database was published, but its parent directory could not be synced."
         ) from error
-    finally:
-        try:
-            os.close(directory_descriptor)
-        except OSError as error:
-            LOGGER.warning("Could not close the database directory descriptor: %s", error)
 
 
 def _remove_temporary_database_files(temporary_path: Path) -> None:

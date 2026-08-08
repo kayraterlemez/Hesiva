@@ -1,5 +1,15 @@
 from hesiva.services.account_history_service import AccountHistoryService
 from hesiva.services.animal_service import AnimalService
+from hesiva.services.backup_service import (
+    BackupError,
+    BackupMetadata,
+    BackupPathError,
+    BackupService,
+    BackupValidationError,
+    RestoreError,
+    RestoreResult,
+    RestoreRollbackError,
+)
 from hesiva.services.customer_detail_service import CustomerDetailService
 from hesiva.services.customer_service import CustomerService
 from hesiva.services.customer_summary_service import CustomerSummaryService
@@ -21,6 +31,11 @@ __all__ = [
     "AccountHistoryService",
     "AnimalNotFoundError",
     "AnimalService",
+    "BackupError",
+    "BackupMetadata",
+    "BackupPathError",
+    "BackupService",
+    "BackupValidationError",
     "CustomerNotFoundError",
     "CustomerDetailService",
     "CustomerService",
@@ -30,6 +45,9 @@ __all__ = [
     "ReminderNotFoundError",
     "ReminderService",
     "ReportService",
+    "RestoreError",
+    "RestoreResult",
+    "RestoreRollbackError",
     "ServiceError",
     "TransactionNotFoundError",
     "TransactionService",

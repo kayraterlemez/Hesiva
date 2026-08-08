@@ -1,6 +1,7 @@
 import logging
 from collections.abc import Iterable
-from datetime import date
+from datetime import date, datetime
+from pathlib import Path
 
 from PySide6.QtCore import QSignalBlocker, Qt, QTimer
 from PySide6.QtGui import QAction, QColor
@@ -8,6 +9,8 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
     QCheckBox,
+    QDialog,
+    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -40,8 +43,14 @@ from hesiva.read_models import (
     CustomerSummarySort,
     ReminderSummary,
 )
-from hesiva.services import ServiceError, ValidationError
-from hesiva.ui import animal_dialogs, customer_dialogs, reminder_dialogs
+from hesiva.services import (
+    BackupError,
+    BackupValidationError,
+    RestoreRollbackError,
+    ServiceError,
+    ValidationError,
+)
+from hesiva.ui import animal_dialogs, backup_dialogs, customer_dialogs, reminder_dialogs
 from hesiva.ui.animal_dialogs import (
     AnimalFormDialog,
     AnimalFormValues,
@@ -197,7 +206,9 @@ class MainWindow(QMainWindow):
 
     def _create_menu_bar(self) -> None:
         file_menu = self.menuBar().addMenu("Dosya")
-        self._add_disabled_actions(file_menu, ("Yedekleme ve Veri Güvenliği",))
+        self.backup_action = QAction("Yedekleme ve Veri Güvenliği", self)
+        self.backup_action.triggered.connect(self._open_backup_dialog)
+        file_menu.addAction(self.backup_action)
         file_menu.addSeparator()
         exit_action = QAction("Çıkış", self)
         exit_action.triggered.connect(self.close)
@@ -1894,6 +1905,142 @@ class MainWindow(QMainWindow):
 
     def _show_financial_operation_error(self, message: str) -> None:
         QMessageBox.warning(self, "İşlem Tamamlanamadı", message)
+
+    def _open_backup_dialog(self) -> None:
+        try:
+            backup_directory = self._application_context.prepare_default_backup_directory()
+        except OSError:
+            LOGGER.exception("The default backup directory could not be prepared")
+            backup_directory = self._application_context.database_path.parent
+        dialog = backup_dialogs.BackupDialog(backup_directory, self)
+
+        def change_location() -> None:
+            selected_directory = QFileDialog.getExistingDirectory(
+                dialog,
+                "Yedekleme Konumunu Seç",
+                str(dialog.destination_directory),
+            )
+            if selected_directory:
+                dialog.set_destination_directory(Path(selected_directory))
+
+        def create_backup() -> None:
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            suggested_path = dialog.destination_directory / f"hesiva_backup_{timestamp}.zip"
+            selected_path, _ = QFileDialog.getSaveFileName(
+                dialog,
+                "Hesiva Yedeğini Kaydet",
+                str(suggested_path),
+                "Hesiva Yedeği (*.zip)",
+            )
+            if not selected_path:
+                return
+            destination = Path(selected_path)
+            if destination.suffix.lower() != ".zip":
+                destination = destination.with_suffix(".zip")
+            dialog.set_busy(True)
+            try:
+                metadata = self._application_context.create_backup(destination)
+            except BackupError:
+                LOGGER.exception("Hesiva backup creation failed")
+                dialog.show_operation_error("Son yedekleme başarısız oldu: Yedek oluşturulamadı.")
+            except Exception:
+                LOGGER.exception("Unexpected Hesiva backup creation failure")
+                dialog.show_operation_error("Son yedekleme başarısız oldu: Yedek oluşturulamadı.")
+            else:
+                dialog.set_destination_directory(destination.parent)
+                dialog.show_backup_success(metadata)
+            finally:
+                dialog.set_busy(False)
+
+        def restore_backup() -> None:
+            selected_path, _ = QFileDialog.getOpenFileName(
+                dialog,
+                "Hesiva Yedeğini Seç",
+                str(dialog.destination_directory),
+                "Hesiva Yedeği (*.zip)",
+            )
+            if not selected_path:
+                return
+            backup_path = Path(selected_path)
+            try:
+                metadata = self._application_context.validate_backup(backup_path)
+            except BackupValidationError:
+                LOGGER.warning("An invalid Hesiva backup was selected for restore")
+                dialog.show_operation_error(
+                    "Geçersiz yedek dosyası: Yedek doğrulanamadı veya uyumlu değil."
+                )
+                return
+            except BackupError:
+                LOGGER.exception("Hesiva backup validation failed")
+                dialog.show_operation_error("Yedek dosyası doğrulanamadı.")
+                return
+            except Exception:
+                LOGGER.exception("Unexpected Hesiva backup validation failure")
+                dialog.show_operation_error("Yedek dosyası doğrulanamadı.")
+                return
+
+            confirmation = backup_dialogs.RestoreConfirmationDialog(metadata, dialog)
+            confirmed = confirmation.exec() == QDialog.DialogCode.Accepted
+            confirmation.deleteLater()
+            if not confirmed:
+                return
+
+            dialog.set_busy(True)
+            try:
+                self._application_context.restore_backup(backup_path)
+            except RestoreRollbackError as error:
+                LOGGER.exception(
+                    "Restore rollback failed; safety backup retained at %s",
+                    error.safety_backup_path,
+                )
+                QMessageBox.critical(
+                    dialog,
+                    "Geri Yükleme Tamamlanamadı",
+                    "Geri yükleme ve otomatik kurtarma tamamlanamadı. "
+                    "Güvenlik yedeği korundu; Hesiva'yı kapatıp teknik destek alın.",
+                )
+            except BackupError:
+                LOGGER.exception("Hesiva restore failed")
+                dialog.show_operation_error(
+                    "Geri yükleme tamamlanamadı. Mevcut veriler korundu veya geri alındı."
+                )
+            except Exception:
+                LOGGER.exception("Unexpected Hesiva restore failure")
+                dialog.show_operation_error(
+                    "Geri yükleme tamamlanamadı. Mevcut veriler korundu veya geri alındı."
+                )
+            else:
+                dialog.accept()
+                self._reset_after_successful_restore()
+                QMessageBox.information(
+                    self,
+                    "Geri Yükleme Tamamlandı",
+                    "Yedek başarıyla geri yüklendi. Hesiva verileri yenilendi.",
+                )
+            finally:
+                dialog.set_busy(False)
+
+        dialog.change_location_requested.connect(change_location)
+        dialog.create_requested.connect(create_backup)
+        dialog.restore_requested.connect(restore_backup)
+        dialog.exec()
+        dialog.change_location_requested.disconnect(change_location)
+        dialog.create_requested.disconnect(create_backup)
+        dialog.restore_requested.disconnect(restore_backup)
+        dialog.deleteLater()
+
+    def _reset_after_successful_restore(self) -> None:
+        """Discard every database-derived UI value and reload from the rebound context."""
+        self._search_timer.stop()
+        search_blocker = QSignalBlocker(self.customer_search_input)
+        sort_blocker = QSignalBlocker(self.customer_sort_combo)
+        self.customer_search_input.clear()
+        self.customer_sort_combo.setCurrentIndex(0)
+        del search_blocker, sort_blocker
+        self._customer_summaries_by_id = {}
+        self.customer_list.clear()
+        self._show_no_customer_selected()
+        self.refresh_customer_summaries()
 
     def _open_customer_statement(self) -> None:
         customer_id = self._selected_customer_id

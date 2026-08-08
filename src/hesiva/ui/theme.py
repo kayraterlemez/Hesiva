@@ -154,6 +154,15 @@ QLabel[errorMessage="true"] {
     padding: 7px;
 }
 
+QLabel[successMessage="true"] {
+    color: #07664f;
+    background: #e2f7ee;
+    border: 1px solid #9edfc9;
+    border-radius: 3px;
+    padding: 8px;
+    font-weight: 600;
+}
+
 QLabel[dialogHeading="true"] {
     color: #172534;
     font-size: 18px;
