@@ -38,8 +38,10 @@ def test_service_sets_use_short_lived_sessions_and_persist_successful_writes(
     with application_context.services() as first_services:
         customer = first_services.customer.create_customer("Composed Customer")
         customer_id = customer.id
+        summaries = first_services.customer_summary.list_customer_summaries()
         first_session = object_session(customer)
         assert first_session is not None
+        assert [summary.customer_id for summary in summaries] == [customer_id]
 
     assert object_session(customer) is None
 

@@ -1206,10 +1206,10 @@ Names must not be modified permanently just to simplify searching.
 
 If the customer list supports sorting by:
 
-- Name
-- Highest debt
-- Lowest debt
-- Recent activity
+- Name (`full_name`, then customer ID ascending)
+- Highest debt (raw signed balance descending, then name and customer ID)
+- Recent activity (latest non-void transaction first; customers without transactions last)
+- Registration date (`registered_on` descending with NULL values last)
 
 the underlying ordering should be tested independently from the visible table.
 
@@ -1219,6 +1219,12 @@ Special cases should include:
 - Zero balance
 - Negative balance, presented by absolute amount as **Fazla Ödeme**
 - Customers with no transactions
+- Duplicate names and equal sort values
+- Nullable transaction times and registration dates
+
+Customer-summary query tests should also prove that balance and latest-transaction data are loaded
+with a bounded number of set-based SQL queries independent of customer count. The read model must
+retain the raw signed balance and must not expose ORM entities or SQLAlchemy row objects.
 
 ---
 
