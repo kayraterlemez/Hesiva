@@ -1,7 +1,7 @@
 """Typed, persistence-independent read models used by application-facing queries."""
 
 from dataclasses import dataclass
-from datetime import date, time
+from datetime import date, datetime, time
 from enum import StrEnum
 
 
@@ -51,3 +51,31 @@ class ArchivedCustomer:
     full_name: str
     phone: str | None
     registered_on: date | None
+
+
+@dataclass(frozen=True, slots=True)
+class AnimalOption:
+    """Immutable active-animal data used by transaction selection controls."""
+
+    animal_id: int
+    ear_tag: str | None
+    name: str | None
+    species: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class AccountHistoryRow:
+    """One immutable financial-history row with its chronological running balance."""
+
+    transaction_id: int
+    transaction_date: date
+    transaction_time: time | None
+    description: str
+    animal_id: int | None
+    animal_ear_tag: str | None
+    animal_name: str | None
+    animal_species: str | None
+    amount_kurus: int
+    running_balance_kurus: int
+    voided_at: datetime | None
+    void_reason: str | None

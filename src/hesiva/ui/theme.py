@@ -44,6 +44,7 @@ QMenu::item:selected {
 
 QLineEdit,
 QComboBox,
+QDateEdit,
 QPlainTextEdit {
     min-height: 30px;
     background: #ffffff;
@@ -55,6 +56,7 @@ QPlainTextEdit {
 
 QLineEdit:focus,
 QComboBox:focus,
+QDateEdit:focus,
 QPlainTextEdit:focus {
     border: 1px solid #2d649b;
 }
@@ -100,6 +102,17 @@ QPushButton[archiveAction="true"] {
 
 QPushButton[archiveAction="true"]:hover {
     background: #ffe9ad;
+}
+
+QPushButton[destructive="true"] {
+    color: #ffffff;
+    background: #b4232e;
+    border-color: #b4232e;
+    font-weight: 600;
+}
+
+QPushButton[destructive="true"]:hover {
+    background: #941d26;
 }
 
 QPushButton:disabled {
@@ -207,6 +220,33 @@ QListWidget::item:selected {
     color: #173d65;
     background: #e3effb;
     border-left: 3px solid #66b7ee;
+}
+
+QTableWidget {
+    background: #ffffff;
+    alternate-background-color: #f7f9fb;
+    border: 1px solid #d8dee6;
+    gridline-color: #e1e5e9;
+    selection-background-color: #e3effb;
+    selection-color: #173d65;
+}
+
+QHeaderView::section {
+    color: #405064;
+    background: #eef2f6;
+    border: 0;
+    border-right: 1px solid #d8dee6;
+    border-bottom: 1px solid #cbd3dd;
+    padding: 7px 8px;
+    font-weight: 700;
+}
+
+QLabel[warningMessage="true"] {
+    color: #6b4300;
+    background: #fff4d6;
+    border: 1px solid #e0b75f;
+    border-radius: 3px;
+    padding: 8px;
 }
 
 QWidget[customerRow="true"] {

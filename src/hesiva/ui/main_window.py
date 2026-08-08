@@ -2,8 +2,9 @@ import logging
 from collections.abc import Iterable
 
 from PySide6.QtCore import QSignalBlocker, Qt, QTimer
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QColor
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QComboBox,
     QFrame,
     QGridLayout,
@@ -19,13 +20,17 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QStackedWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QTabWidget,
+    QHeaderView,
     QVBoxLayout,
     QWidget,
 )
 
 from hesiva.composition import ApplicationContext
 from hesiva.read_models import (
+    AccountHistoryRow,
     ArchivedCustomer,
     CustomerDetail,
     CustomerSummary,
@@ -38,7 +43,13 @@ from hesiva.ui.customer_dialogs import (
     CustomerFormDialog,
     CustomerFormValues,
 )
+from hesiva.ui.financial_dialogs import (
+    DebtTransactionDialog,
+    PaymentDialog,
+    VoidTransactionDialog,
+)
 from hesiva.ui.presentation import (
+    format_animal_display,
     format_balance_kurus,
     format_date,
     format_money_kurus,
@@ -137,6 +148,7 @@ class MainWindow(QMainWindow):
         self._customer_summaries_by_id: dict[int, CustomerSummary] = {}
         self._selected_customer_id: int | None = None
         self._selected_customer_detail: CustomerDetail | None = None
+        self._account_history_by_id: dict[int, AccountHistoryRow] = {}
         self.setWindowTitle("Hesiva")
         self.setObjectName("mainWindow")
         self.setMinimumSize(MINIMUM_WINDOW_WIDTH, MINIMUM_WINDOW_HEIGHT)
@@ -177,10 +189,14 @@ class MainWindow(QMainWindow):
         self.archived_customers_action.triggered.connect(self._open_archived_customers_dialog)
         operations_menu.addAction(self.archived_customers_action)
         operations_menu.addSeparator()
-        self._add_disabled_actions(
-            operations_menu,
-            ("Yeni İşlem", "Ödeme Al"),
-        )
+        self.new_transaction_action = QAction("Yeni İşlem", self)
+        self.new_transaction_action.setEnabled(False)
+        self.new_transaction_action.triggered.connect(self._open_debt_transaction_dialog)
+        operations_menu.addAction(self.new_transaction_action)
+        self.receive_payment_action = QAction("Ödeme Al", self)
+        self.receive_payment_action.setEnabled(False)
+        self.receive_payment_action.triggered.connect(self._open_payment_dialog)
+        operations_menu.addAction(self.receive_payment_action)
 
         report_menu = self.menuBar().addMenu("Rapor")
         self._add_disabled_actions(
@@ -401,15 +417,15 @@ class MainWindow(QMainWindow):
         self.customer_tabs.setObjectName("customerTabs")
         self.customer_tabs.setAccessibleName("Müşteri detay sekmeleri")
         self.customer_tabs.addTab(self._create_general_tab(), "Genel")
-        for object_name, label in (
-            ("animalsTab", "Hayvanlar"),
-            ("accountHistoryTab", "Hesap Hareketleri"),
-            ("remindersTab", "Hatırlatmalar"),
-        ):
-            tab = QWidget(self.customer_tabs)
-            tab.setObjectName(object_name)
-            tab.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-            self.customer_tabs.addTab(tab, label)
+        animals_tab = QWidget(self.customer_tabs)
+        animals_tab.setObjectName("animalsTab")
+        animals_tab.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.customer_tabs.addTab(animals_tab, "Hayvanlar")
+        self.customer_tabs.addTab(self._create_account_history_tab(), "Hesap Hareketleri")
+        reminders_tab = QWidget(self.customer_tabs)
+        reminders_tab.setObjectName("remindersTab")
+        reminders_tab.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.customer_tabs.addTab(reminders_tab, "Hatırlatmalar")
         layout.addWidget(self.customer_tabs, 1)
         return shell
 
@@ -550,6 +566,79 @@ class MainWindow(QMainWindow):
         layout.addLayout(actions_layout)
         return tab
 
+    def _create_account_history_tab(self) -> QWidget:
+        tab = QWidget(self.customer_tabs)
+        tab.setObjectName("accountHistoryTab")
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(10)
+
+        actions = QHBoxLayout()
+        self.new_transaction_button = QPushButton("Yeni İşlem", tab)
+        self.new_transaction_button.setObjectName("newTransactionButton")
+        self.new_transaction_button.setProperty("primary", True)
+        self.new_transaction_button.setEnabled(False)
+        self.new_transaction_button.clicked.connect(self._open_debt_transaction_dialog)
+        actions.addWidget(self.new_transaction_button)
+        self.receive_payment_button = QPushButton("Ödeme Al", tab)
+        self.receive_payment_button.setObjectName("receivePaymentButton")
+        self.receive_payment_button.setProperty("primary", True)
+        self.receive_payment_button.setEnabled(False)
+        self.receive_payment_button.clicked.connect(self._open_payment_dialog)
+        actions.addWidget(self.receive_payment_button)
+        actions.addStretch()
+        print_button = QPushButton("Yazdır", tab)
+        print_button.setEnabled(False)
+        actions.addWidget(print_button)
+        layout.addLayout(actions)
+
+        self.account_history_stack = QStackedWidget(tab)
+        self.account_history_empty_state = EmptyState(
+            "Bu müşterinin hesap hareketi bulunmuyor.",
+            object_name="accountHistoryEmptyState",
+            parent=self.account_history_stack,
+        )
+        self.account_history_error_state = EmptyState(
+            "Hesap hareketleri yüklenemedi. Lütfen yeniden deneyin.",
+            object_name="accountHistoryErrorState",
+            parent=self.account_history_stack,
+        )
+        self.account_history_table = QTableWidget(0, 7, self.account_history_stack)
+        self.account_history_table.setObjectName("accountHistoryTable")
+        self.account_history_table.setHorizontalHeaderLabels(
+            ("Tarih", "Saat", "Açıklama", "Hayvan", "Borç", "Ödeme", "Bakiye")
+        )
+        self.account_history_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.account_history_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.account_history_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.account_history_table.setAlternatingRowColors(True)
+        self.account_history_table.verticalHeader().hide()
+        header = self.account_history_table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        self.account_history_table.itemSelectionChanged.connect(
+            self._account_history_selection_changed
+        )
+        self.account_history_stack.addWidget(self.account_history_empty_state)
+        self.account_history_stack.addWidget(self.account_history_table)
+        self.account_history_stack.addWidget(self.account_history_error_state)
+        self.account_history_stack.setCurrentWidget(self.account_history_empty_state)
+        layout.addWidget(self.account_history_stack, 1)
+
+        footer = QHBoxLayout()
+        footer.addStretch()
+        self.void_transaction_button = QPushButton("İşlemi İptal Et", tab)
+        self.void_transaction_button.setObjectName("voidTransactionButton")
+        self.void_transaction_button.setProperty("destructive", True)
+        self.void_transaction_button.setEnabled(False)
+        self.void_transaction_button.clicked.connect(self._open_void_transaction_dialog)
+        footer.addWidget(self.void_transaction_button)
+        layout.addLayout(footer)
+        return tab
+
     @staticmethod
     def _create_detail_value_label(
         parent: QWidget,
@@ -656,6 +745,7 @@ class MainWindow(QMainWindow):
         self._selected_customer_id = summary.customer_id
         self._selected_customer_detail = None
         self._clear_customer_detail_values()
+        self._clear_account_history()
         try:
             with self._application_context.services() as services:
                 detail = services.customer_detail.get_customer_detail(summary.customer_id)
@@ -686,16 +776,20 @@ class MainWindow(QMainWindow):
         self.general_balance_value.setText(format_balance_kurus(detail.balance_kurus))
         self.general_notes_value.setText(detail.notes or "-")
         self._set_customer_write_actions_enabled(True)
+        self._set_financial_actions_enabled(True)
         self.customer_detail_stack.setCurrentWidget(self.customer_detail_shell)
+        self.refresh_account_history(detail.customer_id)
 
     def _show_no_customer_selected(self) -> None:
         self._selected_customer_id = None
         self._selected_customer_detail = None
         self._clear_customer_detail_values()
+        self._clear_account_history()
         self.customer_detail_stack.setCurrentWidget(self.no_customer_selected_state)
 
     def _clear_customer_detail_values(self) -> None:
         self._set_customer_write_actions_enabled(False)
+        self._set_financial_actions_enabled(False)
         self.customer_name_label.clear()
         self.customer_phone_label.setText("Telefon:")
         self.customer_phone_label.hide()
@@ -713,6 +807,119 @@ class MainWindow(QMainWindow):
     def _set_customer_write_actions_enabled(self, enabled: bool) -> None:
         self.edit_customer_button.setEnabled(enabled)
         self.archive_customer_button.setEnabled(enabled)
+
+    def _set_financial_actions_enabled(self, enabled: bool) -> None:
+        self.new_transaction_action.setEnabled(enabled)
+        self.receive_payment_action.setEnabled(enabled)
+        self.new_transaction_button.setEnabled(enabled)
+        self.receive_payment_button.setEnabled(enabled)
+        if not enabled:
+            self.void_transaction_button.setEnabled(False)
+
+    def refresh_account_history(self, customer_id: int | None = None) -> None:
+        """Reload the selected customer's plain financial-history rows."""
+        target_customer_id = self._selected_customer_id if customer_id is None else customer_id
+        if target_customer_id is None:
+            self._clear_account_history()
+            return
+
+        selected_transaction_id = self._selected_transaction_id()
+        try:
+            with self._application_context.services() as services:
+                rows = services.account_history.list_for_customer(target_customer_id)
+        except Exception:
+            LOGGER.exception(
+                "Account history could not be loaded for customer %s",
+                target_customer_id,
+            )
+            self._account_history_by_id = {}
+            self.account_history_table.setRowCount(0)
+            self.account_history_stack.setCurrentWidget(self.account_history_error_state)
+            self.void_transaction_button.setEnabled(False)
+            return
+
+        self._populate_account_history(rows, selected_transaction_id)
+
+    def _populate_account_history(
+        self,
+        rows: list[AccountHistoryRow],
+        selected_transaction_id: int | None,
+    ) -> None:
+        self._account_history_by_id = {row.transaction_id: row for row in rows}
+        blocker = QSignalBlocker(self.account_history_table)
+        self.account_history_table.setRowCount(len(rows))
+        selected_table_row: int | None = None
+        for table_row, history_row in enumerate(rows):
+            animal_text = (
+                "-"
+                if history_row.animal_id is None
+                else format_animal_display(
+                    history_row.animal_ear_tag,
+                    history_row.animal_name,
+                    history_row.animal_species,
+                )
+            )
+            description = history_row.description
+            if history_row.voided_at is not None:
+                description = f"{description} • İptal"
+            values = (
+                format_date(history_row.transaction_date),
+                history_row.transaction_time.strftime("%H:%M")
+                if history_row.transaction_time is not None
+                else "-",
+                description,
+                animal_text,
+                format_money_kurus(history_row.amount_kurus)
+                if history_row.amount_kurus > 0
+                else "",
+                format_money_kurus(abs(history_row.amount_kurus))
+                if history_row.amount_kurus < 0
+                else "",
+                format_balance_kurus(history_row.running_balance_kurus),
+            )
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if column == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, history_row.transaction_id)
+                if column >= 4:
+                    item.setTextAlignment(
+                        Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                    )
+                if history_row.voided_at is not None:
+                    item.setBackground(QColor("#fff0f1"))
+                    item.setToolTip(history_row.void_reason or "İptal edildi")
+                self.account_history_table.setItem(table_row, column, item)
+            if history_row.transaction_id == selected_transaction_id:
+                selected_table_row = table_row
+        if selected_table_row is not None:
+            self.account_history_table.selectRow(selected_table_row)
+        del blocker
+
+        if rows:
+            self.account_history_stack.setCurrentWidget(self.account_history_table)
+        else:
+            self.account_history_stack.setCurrentWidget(self.account_history_empty_state)
+        self._account_history_selection_changed()
+
+    def _clear_account_history(self) -> None:
+        self._account_history_by_id = {}
+        self.account_history_table.setRowCount(0)
+        self.account_history_stack.setCurrentWidget(self.account_history_empty_state)
+        self.void_transaction_button.setEnabled(False)
+
+    def _selected_transaction_id(self) -> int | None:
+        selected_rows = self.account_history_table.selectionModel().selectedRows()
+        if not selected_rows:
+            return None
+        item = self.account_history_table.item(selected_rows[0].row(), 0)
+        return None if item is None else item.data(Qt.ItemDataRole.UserRole)
+
+    def _account_history_selection_changed(self) -> None:
+        transaction_id = self._selected_transaction_id()
+        row = self._account_history_by_id.get(transaction_id)
+        self.void_transaction_button.setEnabled(
+            row is not None and row.voided_at is None and self._selected_customer_detail is not None
+        )
 
     def _open_new_customer_dialog(self) -> None:
         dialog = CustomerFormDialog("Yeni Müşteri", parent=self)
@@ -839,6 +1046,131 @@ class MainWindow(QMainWindow):
             return
 
         self.refresh_customer_summaries()
+
+    def _open_debt_transaction_dialog(self) -> None:
+        detail = self._selected_customer_detail
+        if detail is None or detail.customer_id != self._selected_customer_id:
+            return
+        try:
+            with self._application_context.services() as services:
+                animal_options = services.animal.list_active_options(detail.customer_id)
+        except ServiceError:
+            self._show_financial_operation_error(
+                "Hayvan seçenekleri yüklenemedi. Lütfen yeniden deneyin."
+            )
+            return
+        except Exception:
+            LOGGER.exception("Animal options could not be loaded")
+            self._show_financial_operation_error(
+                "Hayvan seçenekleri yüklenemedi. Lütfen yeniden deneyin."
+            )
+            return
+
+        dialog = DebtTransactionDialog(detail.full_name, animal_options, self)
+        created = False
+
+        def create_debt() -> None:
+            nonlocal created
+            values = dialog.values()
+            try:
+                with self._application_context.services() as services:
+                    services.transaction.create_debt(
+                        detail.customer_id,
+                        transaction_date=values.transaction_date,
+                        description=values.description,
+                        amount_kurus=values.amount_kurus,
+                        animal_id=values.animal_id,
+                        transaction_time=None,
+                        note=values.note,
+                    )
+            except (ValidationError, ServiceError):
+                dialog.show_error("İşlem kaydedilemedi. Lütfen alanları kontrol edin.")
+            except Exception:
+                LOGGER.exception("Debt transaction could not be created")
+                dialog.show_error("İşlem kaydedilemedi. Lütfen yeniden deneyin.")
+            else:
+                created = True
+                dialog.accept()
+
+        dialog.save_requested.connect(create_debt)
+        dialog.exec()
+        dialog.save_requested.disconnect(create_debt)
+        dialog.deleteLater()
+        if created:
+            self._refresh_after_financial_write(detail.customer_id)
+
+    def _open_payment_dialog(self) -> None:
+        detail = self._selected_customer_detail
+        if detail is None or detail.customer_id != self._selected_customer_id:
+            return
+        dialog = PaymentDialog(detail.full_name, detail.balance_kurus, self)
+        created = False
+
+        def create_payment() -> None:
+            nonlocal created
+            values = dialog.values()
+            try:
+                with self._application_context.services() as services:
+                    services.transaction.create_payment(
+                        detail.customer_id,
+                        transaction_date=values.transaction_date,
+                        description=values.description,
+                        amount_kurus=values.amount_kurus,
+                        animal_id=None,
+                        transaction_time=None,
+                        note=None,
+                    )
+            except (ValidationError, ServiceError):
+                dialog.show_error("Ödeme kaydedilemedi. Lütfen alanları kontrol edin.")
+            except Exception:
+                LOGGER.exception("Payment could not be created")
+                dialog.show_error("Ödeme kaydedilemedi. Lütfen yeniden deneyin.")
+            else:
+                created = True
+                dialog.accept()
+
+        dialog.save_requested.connect(create_payment)
+        dialog.exec()
+        dialog.save_requested.disconnect(create_payment)
+        dialog.deleteLater()
+        if created:
+            self._refresh_after_financial_write(detail.customer_id)
+
+    def _open_void_transaction_dialog(self) -> None:
+        transaction_id = self._selected_transaction_id()
+        row = self._account_history_by_id.get(transaction_id)
+        if row is None or row.voided_at is not None:
+            return
+        dialog = VoidTransactionDialog(row, self)
+        voided = False
+
+        def void_transaction() -> None:
+            nonlocal voided
+            try:
+                with self._application_context.services() as services:
+                    services.transaction.void_transaction(row.transaction_id, dialog.reason())
+            except (ValidationError, ServiceError):
+                dialog.show_error("İşlem iptal edilemedi. Lütfen yeniden deneyin.")
+            except Exception:
+                LOGGER.exception("Transaction %s could not be voided", row.transaction_id)
+                dialog.show_error("İşlem iptal edilemedi. Lütfen yeniden deneyin.")
+            else:
+                voided = True
+                dialog.accept()
+
+        dialog.void_requested.connect(void_transaction)
+        dialog.exec()
+        dialog.void_requested.disconnect(void_transaction)
+        dialog.deleteLater()
+        if voided and self._selected_customer_id is not None:
+            self._refresh_after_financial_write(self._selected_customer_id)
+
+    def _refresh_after_financial_write(self, customer_id: int) -> None:
+        self._selected_customer_id = customer_id
+        self.refresh_customer_summaries()
+
+    def _show_financial_operation_error(self, message: str) -> None:
+        QMessageBox.warning(self, "İşlem Tamamlanamadı", message)
 
     def _open_archived_customers_dialog(self) -> None:
         dialog = ArchivedCustomersDialog(self)

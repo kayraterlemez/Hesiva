@@ -1,7 +1,10 @@
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, case, func, select
 from sqlalchemy.orm import Session
 
+from hesiva.models.animal import Animal
+from hesiva.models.customer import Customer
 from hesiva.models.transaction import Transaction
+from hesiva.read_models import AccountHistoryRow
 
 
 class TransactionRepository:
@@ -47,6 +50,75 @@ class TransactionRepository:
             Transaction.voided_at.is_(None),
         )
         return int(self._session.scalar(statement))
+
+    def list_active_customer_history(
+        self,
+        customer_id: int,
+    ) -> list[AccountHistoryRow] | None:
+        chronological_balance = func.sum(
+            case(
+                (Transaction.voided_at.is_(None), Transaction.amount_kurus),
+                else_=0,
+            )
+        ).over(
+            partition_by=Customer.id,
+            order_by=(
+                Transaction.transaction_date.asc(),
+                Transaction.transaction_time.asc().nulls_first(),
+                Transaction.id.asc(),
+            ),
+            rows=(None, 0),
+        )
+        statement = (
+            select(
+                Customer.id.label("customer_id"),
+                Transaction.id.label("transaction_id"),
+                Transaction.transaction_date,
+                Transaction.transaction_time,
+                Transaction.description,
+                Transaction.animal_id,
+                Animal.ear_tag.label("animal_ear_tag"),
+                Animal.name.label("animal_name"),
+                Animal.species.label("animal_species"),
+                Transaction.amount_kurus,
+                chronological_balance.label("running_balance_kurus"),
+                Transaction.voided_at,
+                Transaction.void_reason,
+            )
+            .select_from(Customer)
+            .outerjoin(Transaction, Transaction.customer_id == Customer.id)
+            .outerjoin(Animal, Animal.id == Transaction.animal_id)
+            .where(
+                Customer.id == customer_id,
+                Customer.archived_at.is_(None),
+            )
+            .order_by(
+                Transaction.transaction_date.desc().nulls_last(),
+                Transaction.transaction_time.desc().nulls_last(),
+                Transaction.id.desc().nulls_last(),
+            )
+        )
+        rows = list(self._session.execute(statement))
+        if not rows:
+            return None
+        return [
+            AccountHistoryRow(
+                transaction_id=row.transaction_id,
+                transaction_date=row.transaction_date,
+                transaction_time=row.transaction_time,
+                description=row.description,
+                animal_id=row.animal_id,
+                animal_ear_tag=row.animal_ear_tag,
+                animal_name=row.animal_name,
+                animal_species=row.animal_species,
+                amount_kurus=int(row.amount_kurus),
+                running_balance_kurus=int(row.running_balance_kurus),
+                voided_at=row.voided_at,
+                void_reason=row.void_reason,
+            )
+            for row in rows
+            if row.transaction_id is not None
+        ]
 
     def _list_history(
         self,

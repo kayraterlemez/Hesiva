@@ -2,6 +2,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from hesiva.models.animal import Animal
+from hesiva.read_models import AnimalOption
 
 
 class AnimalRepository:
@@ -35,3 +36,27 @@ class AnimalRepository:
     def find_by_ear_tag(self, ear_tag: str) -> list[Animal]:
         statement = select(Animal).where(Animal.ear_tag == ear_tag).order_by(Animal.id)
         return list(self._session.scalars(statement).all())
+
+    def list_active_options(self, customer_id: int) -> list[AnimalOption]:
+        statement = (
+            select(
+                Animal.id.label("animal_id"),
+                Animal.ear_tag,
+                Animal.name,
+                Animal.species,
+            )
+            .where(
+                Animal.customer_id == customer_id,
+                Animal.archived_at.is_(None),
+            )
+            .order_by(Animal.id)
+        )
+        return [
+            AnimalOption(
+                animal_id=row.animal_id,
+                ear_tag=row.ear_tag,
+                name=row.name,
+                species=row.species,
+            )
+            for row in self._session.execute(statement)
+        ]
