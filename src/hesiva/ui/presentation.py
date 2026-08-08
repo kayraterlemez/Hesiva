@@ -76,6 +76,17 @@ def format_animal_display(
     return "Tanımsız Hayvan"
 
 
+def format_animal_identity(
+    ear_tag: str | None,
+    name: str | None,
+    species: str | None,
+) -> str:
+    """Build a deterministic user-facing identity without exposing a database ID."""
+    if ear_tag and name:
+        return f"{ear_tag} — {name}"
+    return name or ear_tag or species or "Adsız hayvan"
+
+
 def format_transaction_moment(
     transaction_date: date | None,
     transaction_time: time | None,

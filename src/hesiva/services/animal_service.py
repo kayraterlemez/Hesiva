@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from hesiva.models._timestamps import utc_now
 from hesiva.models.animal import Animal
 from hesiva.models.customer import Customer
-from hesiva.read_models import AnimalOption
+from hesiva.read_models import AnimalOption, AnimalSummary
 from hesiva.repositories.animal_repository import AnimalRepository
 from hesiva.repositories.customer_repository import CustomerRepository
 from hesiva.services._text import normalize_optional_text
@@ -135,6 +135,14 @@ class AnimalService:
                 "An archived customer's animals cannot be used for a new transaction."
             )
         return self._animal_repository.list_active_options(customer_id)
+
+    def list_active_records(self, customer_id: int) -> list[AnimalSummary]:
+        self._get_customer(customer_id)
+        return self._animal_repository.list_summary_records(customer_id, archived=False)
+
+    def list_archived_records(self, customer_id: int) -> list[AnimalSummary]:
+        self._get_customer(customer_id)
+        return self._animal_repository.list_summary_records(customer_id, archived=True)
 
     def _get_customer(self, customer_id: int) -> Customer:
         customer = self._customer_repository.get_by_id(customer_id)

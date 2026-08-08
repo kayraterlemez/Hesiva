@@ -2,7 +2,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from hesiva.models.animal import Animal
-from hesiva.read_models import AnimalOption
+from hesiva.read_models import AnimalOption, AnimalSummary
 
 
 class AnimalRepository:
@@ -57,6 +57,44 @@ class AnimalRepository:
                 ear_tag=row.ear_tag,
                 name=row.name,
                 species=row.species,
+            )
+            for row in self._session.execute(statement)
+        ]
+
+    def list_summary_records(
+        self,
+        customer_id: int,
+        *,
+        archived: bool,
+    ) -> list[AnimalSummary]:
+        archive_filter = (
+            Animal.archived_at.is_not(None) if archived else Animal.archived_at.is_(None)
+        )
+        statement = (
+            select(
+                Animal.id.label("animal_id"),
+                Animal.customer_id,
+                Animal.ear_tag,
+                Animal.name,
+                Animal.species,
+                Animal.notes,
+                Animal.archived_at,
+            )
+            .where(
+                Animal.customer_id == customer_id,
+                archive_filter,
+            )
+            .order_by(Animal.id)
+        )
+        return [
+            AnimalSummary(
+                animal_id=row.animal_id,
+                customer_id=row.customer_id,
+                ear_tag=row.ear_tag,
+                name=row.name,
+                species=row.species,
+                notes=row.notes,
+                archived_at=row.archived_at,
             )
             for row in self._session.execute(statement)
         ]

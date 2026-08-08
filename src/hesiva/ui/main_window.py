@@ -31,13 +31,19 @@ from PySide6.QtWidgets import (
 from hesiva.composition import ApplicationContext
 from hesiva.read_models import (
     AccountHistoryRow,
+    AnimalSummary,
     ArchivedCustomer,
     CustomerDetail,
     CustomerSummary,
     CustomerSummarySort,
 )
 from hesiva.services import ServiceError, ValidationError
-from hesiva.ui import customer_dialogs
+from hesiva.ui import animal_dialogs, customer_dialogs
+from hesiva.ui.animal_dialogs import (
+    AnimalFormDialog,
+    AnimalFormValues,
+    ArchivedAnimalsDialog,
+)
 from hesiva.ui.customer_dialogs import (
     ArchivedCustomersDialog,
     CustomerFormDialog,
@@ -50,6 +56,7 @@ from hesiva.ui.financial_dialogs import (
 )
 from hesiva.ui.presentation import (
     format_animal_display,
+    format_animal_identity,
     format_balance_kurus,
     format_date,
     format_money_kurus,
@@ -149,6 +156,7 @@ class MainWindow(QMainWindow):
         self._selected_customer_id: int | None = None
         self._selected_customer_detail: CustomerDetail | None = None
         self._account_history_by_id: dict[int, AccountHistoryRow] = {}
+        self._animal_summaries_by_id: dict[int, AnimalSummary] = {}
         self.setWindowTitle("Hesiva")
         self.setObjectName("mainWindow")
         self.setMinimumSize(MINIMUM_WINDOW_WIDTH, MINIMUM_WINDOW_HEIGHT)
@@ -417,10 +425,7 @@ class MainWindow(QMainWindow):
         self.customer_tabs.setObjectName("customerTabs")
         self.customer_tabs.setAccessibleName("Müşteri detay sekmeleri")
         self.customer_tabs.addTab(self._create_general_tab(), "Genel")
-        animals_tab = QWidget(self.customer_tabs)
-        animals_tab.setObjectName("animalsTab")
-        animals_tab.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.customer_tabs.addTab(animals_tab, "Hayvanlar")
+        self.customer_tabs.addTab(self._create_animals_tab(), "Hayvanlar")
         self.customer_tabs.addTab(self._create_account_history_tab(), "Hesap Hareketleri")
         reminders_tab = QWidget(self.customer_tabs)
         reminders_tab.setObjectName("remindersTab")
@@ -564,6 +569,77 @@ class MainWindow(QMainWindow):
         self.edit_customer_button.clicked.connect(self._open_edit_customer_dialog)
         actions_layout.addWidget(self.edit_customer_button)
         layout.addLayout(actions_layout)
+        return tab
+
+    def _create_animals_tab(self) -> QWidget:
+        tab = QWidget(self.customer_tabs)
+        tab.setObjectName("animalsTab")
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(10)
+
+        actions = QHBoxLayout()
+        self.add_animal_button = QPushButton("+ Hayvan Ekle", tab)
+        self.add_animal_button.setObjectName("addAnimalButton")
+        self.add_animal_button.setProperty("primary", True)
+        self.add_animal_button.setEnabled(False)
+        self.add_animal_button.clicked.connect(self._open_add_animal_dialog)
+        actions.addWidget(self.add_animal_button)
+        self.archived_animals_button = QPushButton("Arşivlenmiş Hayvanlar", tab)
+        self.archived_animals_button.setObjectName("archivedAnimalsButton")
+        self.archived_animals_button.setEnabled(False)
+        self.archived_animals_button.clicked.connect(self._open_archived_animals_dialog)
+        actions.addWidget(self.archived_animals_button)
+        actions.addStretch()
+        layout.addLayout(actions)
+
+        self.animal_list_stack = QStackedWidget(tab)
+        self.animal_empty_state = EmptyState(
+            "Bu müşteriye kayıtlı hayvan bulunmuyor.",
+            object_name="animalListEmptyState",
+            parent=self.animal_list_stack,
+        )
+        self.animal_error_state = EmptyState(
+            "Hayvanlar yüklenemedi. Lütfen yeniden deneyin.",
+            object_name="animalListErrorState",
+            parent=self.animal_list_stack,
+        )
+        self.animal_table = QTableWidget(0, 4, self.animal_list_stack)
+        self.animal_table.setObjectName("animalTable")
+        self.animal_table.setHorizontalHeaderLabels(("Küpe No", "Ad", "Tür", "Not"))
+        self.animal_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.animal_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.animal_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.animal_table.setAlternatingRowColors(True)
+        self.animal_table.verticalHeader().hide()
+        animal_header = self.animal_table.horizontalHeader()
+        animal_header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        animal_header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        self.animal_table.itemSelectionChanged.connect(self._animal_selection_changed)
+        self.animal_list_stack.addWidget(self.animal_empty_state)
+        self.animal_list_stack.addWidget(self.animal_table)
+        self.animal_list_stack.addWidget(self.animal_error_state)
+        self.animal_list_stack.setCurrentWidget(self.animal_empty_state)
+        layout.addWidget(self.animal_list_stack, 1)
+
+        footer = QHBoxLayout()
+        self.animal_count_label = QLabel("Toplam Kayıt: 0 hayvan", tab)
+        self.animal_count_label.setObjectName("animalCountLabel")
+        self.animal_count_label.setProperty("muted", True)
+        footer.addWidget(self.animal_count_label)
+        footer.addStretch()
+        self.edit_animal_button = QPushButton("Düzenle", tab)
+        self.edit_animal_button.setObjectName("editAnimalButton")
+        self.edit_animal_button.setEnabled(False)
+        self.edit_animal_button.clicked.connect(self._open_edit_animal_dialog)
+        footer.addWidget(self.edit_animal_button)
+        self.archive_animal_button = QPushButton("Arşivle", tab)
+        self.archive_animal_button.setObjectName("archiveAnimalButton")
+        self.archive_animal_button.setProperty("archiveAction", True)
+        self.archive_animal_button.setEnabled(False)
+        self.archive_animal_button.clicked.connect(self._archive_selected_animal)
+        footer.addWidget(self.archive_animal_button)
+        layout.addLayout(footer)
         return tab
 
     def _create_account_history_tab(self) -> QWidget:
@@ -745,6 +821,7 @@ class MainWindow(QMainWindow):
         self._selected_customer_id = summary.customer_id
         self._selected_customer_detail = None
         self._clear_customer_detail_values()
+        self._clear_animals()
         self._clear_account_history()
         try:
             with self._application_context.services() as services:
@@ -777,19 +854,23 @@ class MainWindow(QMainWindow):
         self.general_notes_value.setText(detail.notes or "-")
         self._set_customer_write_actions_enabled(True)
         self._set_financial_actions_enabled(True)
+        self._set_animal_customer_actions_enabled(True)
         self.customer_detail_stack.setCurrentWidget(self.customer_detail_shell)
+        self.refresh_animals_for_selected_customer(detail.customer_id)
         self.refresh_account_history(detail.customer_id)
 
     def _show_no_customer_selected(self) -> None:
         self._selected_customer_id = None
         self._selected_customer_detail = None
         self._clear_customer_detail_values()
+        self._clear_animals()
         self._clear_account_history()
         self.customer_detail_stack.setCurrentWidget(self.no_customer_selected_state)
 
     def _clear_customer_detail_values(self) -> None:
         self._set_customer_write_actions_enabled(False)
         self._set_financial_actions_enabled(False)
+        self._set_animal_customer_actions_enabled(False)
         self.customer_name_label.clear()
         self.customer_phone_label.setText("Telefon:")
         self.customer_phone_label.hide()
@@ -815,6 +896,96 @@ class MainWindow(QMainWindow):
         self.receive_payment_button.setEnabled(enabled)
         if not enabled:
             self.void_transaction_button.setEnabled(False)
+
+    def _set_animal_customer_actions_enabled(self, enabled: bool) -> None:
+        self.add_animal_button.setEnabled(enabled)
+        self.archived_animals_button.setEnabled(enabled)
+        if not enabled:
+            self.edit_animal_button.setEnabled(False)
+            self.archive_animal_button.setEnabled(False)
+
+    def refresh_animals_for_selected_customer(
+        self,
+        customer_id: int | None = None,
+        *,
+        select_animal_id: int | None = None,
+    ) -> None:
+        """Reload one active customer's immutable animal records."""
+        target_customer_id = self._selected_customer_id if customer_id is None else customer_id
+        if target_customer_id is None:
+            self._clear_animals()
+            return
+        preserved_animal_id = (
+            self._selected_animal_id() if select_animal_id is None else select_animal_id
+        )
+        try:
+            with self._application_context.services() as services:
+                animals = services.animal.list_active_records(target_customer_id)
+        except Exception:
+            LOGGER.exception("Animals could not be loaded for customer %s", target_customer_id)
+            self._animal_summaries_by_id = {}
+            self.animal_table.setRowCount(0)
+            self.animal_count_label.setText("Toplam Kayıt: -")
+            self.animal_list_stack.setCurrentWidget(self.animal_error_state)
+            self.edit_animal_button.setEnabled(False)
+            self.archive_animal_button.setEnabled(False)
+            return
+
+        self._populate_animals(animals, preserved_animal_id)
+
+    def _populate_animals(
+        self,
+        animals: list[AnimalSummary],
+        selected_animal_id: int | None,
+    ) -> None:
+        self._animal_summaries_by_id = {animal.animal_id: animal for animal in animals}
+        blocker = QSignalBlocker(self.animal_table)
+        self.animal_table.setRowCount(len(animals))
+        selected_row: int | None = None
+        for row, animal in enumerate(animals):
+            values = (
+                animal.ear_tag or "-",
+                animal.name or "-",
+                animal.species or "-",
+                animal.notes or "-",
+            )
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if column == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, animal.animal_id)
+                self.animal_table.setItem(row, column, item)
+            if animal.animal_id == selected_animal_id:
+                selected_row = row
+        if selected_row is not None:
+            self.animal_table.selectRow(selected_row)
+        del blocker
+
+        self.animal_count_label.setText(f"Toplam Kayıt: {len(animals)} hayvan")
+        self.animal_list_stack.setCurrentWidget(
+            self.animal_table if animals else self.animal_empty_state
+        )
+        self._animal_selection_changed()
+
+    def _clear_animals(self) -> None:
+        self._animal_summaries_by_id = {}
+        self.animal_table.setRowCount(0)
+        self.animal_count_label.setText("Toplam Kayıt: 0 hayvan")
+        self.animal_list_stack.setCurrentWidget(self.animal_empty_state)
+        self.edit_animal_button.setEnabled(False)
+        self.archive_animal_button.setEnabled(False)
+
+    def _selected_animal_id(self) -> int | None:
+        selected_rows = self.animal_table.selectionModel().selectedRows()
+        if not selected_rows:
+            return None
+        item = self.animal_table.item(selected_rows[0].row(), 0)
+        return None if item is None else item.data(Qt.ItemDataRole.UserRole)
+
+    def _animal_selection_changed(self) -> None:
+        animal = self._animal_summaries_by_id.get(self._selected_animal_id())
+        enabled = animal is not None and self._selected_customer_detail is not None
+        self.edit_animal_button.setEnabled(enabled)
+        self.archive_animal_button.setEnabled(enabled)
 
     def refresh_account_history(self, customer_id: int | None = None) -> None:
         """Reload the selected customer's plain financial-history rows."""
@@ -1046,6 +1217,161 @@ class MainWindow(QMainWindow):
             return
 
         self.refresh_customer_summaries()
+
+    def _open_add_animal_dialog(self) -> None:
+        detail = self._selected_customer_detail
+        if detail is None or detail.customer_id != self._selected_customer_id:
+            return
+        dialog = AnimalFormDialog("Hayvan Ekle", parent=self)
+        created_animal_id: int | None = None
+
+        def create_animal() -> None:
+            nonlocal created_animal_id
+            values = dialog.values()
+            try:
+                with self._application_context.services() as services:
+                    animal = services.animal.create_animal(
+                        detail.customer_id,
+                        ear_tag=values.ear_tag,
+                        name=values.name,
+                        species=values.species,
+                        notes=values.notes,
+                    )
+                    created_animal_id = animal.id
+            except ServiceError:
+                dialog.show_error("Hayvan kaydedilemedi. Lütfen yeniden deneyin.")
+            except Exception:
+                LOGGER.exception("Animal could not be created")
+                dialog.show_error("Hayvan kaydedilemedi. Lütfen yeniden deneyin.")
+            else:
+                dialog.accept()
+
+        dialog.save_requested.connect(create_animal)
+        dialog.exec()
+        dialog.save_requested.disconnect(create_animal)
+        dialog.deleteLater()
+        if created_animal_id is not None:
+            self.refresh_animals_for_selected_customer(
+                detail.customer_id,
+                select_animal_id=created_animal_id,
+            )
+
+    def _open_edit_animal_dialog(self) -> None:
+        animal_id = self._selected_animal_id()
+        animal = self._animal_summaries_by_id.get(animal_id)
+        if animal is None:
+            return
+        dialog = AnimalFormDialog(
+            "Hayvanı Düzenle",
+            initial_values=AnimalFormValues(
+                ear_tag=animal.ear_tag or "",
+                name=animal.name or "",
+                species=animal.species or "",
+                notes=animal.notes or "",
+            ),
+            parent=self,
+        )
+        updated = False
+
+        def update_animal() -> None:
+            nonlocal updated
+            values = dialog.values()
+            try:
+                with self._application_context.services() as services:
+                    services.animal.update_animal(
+                        animal.animal_id,
+                        ear_tag=values.ear_tag,
+                        name=values.name,
+                        species=values.species,
+                        notes=values.notes,
+                    )
+            except ServiceError:
+                dialog.show_error("Hayvan güncellenemedi. Lütfen yeniden deneyin.")
+            except Exception:
+                LOGGER.exception("Animal %s could not be updated", animal.animal_id)
+                dialog.show_error("Hayvan güncellenemedi. Lütfen yeniden deneyin.")
+            else:
+                updated = True
+                dialog.accept()
+
+        dialog.save_requested.connect(update_animal)
+        dialog.exec()
+        dialog.save_requested.disconnect(update_animal)
+        dialog.deleteLater()
+        if updated:
+            self.refresh_animals_for_selected_customer(
+                animal.customer_id,
+                select_animal_id=animal.animal_id,
+            )
+            self.refresh_account_history(animal.customer_id)
+
+    def _archive_selected_animal(self) -> None:
+        animal_id = self._selected_animal_id()
+        animal = self._animal_summaries_by_id.get(animal_id)
+        if animal is None:
+            return
+        animal_label = format_animal_identity(animal.ear_tag, animal.name, animal.species)
+        if not animal_dialogs.confirm_animal_archive(self, animal_label):
+            return
+        try:
+            with self._application_context.services() as services:
+                services.animal.archive_animal(animal.animal_id)
+        except ServiceError:
+            self._show_animal_operation_error("Hayvan arşivlenemedi. Lütfen yeniden deneyin.")
+            return
+        except Exception:
+            LOGGER.exception("Animal %s could not be archived", animal.animal_id)
+            self._show_animal_operation_error("Hayvan arşivlenemedi. Lütfen yeniden deneyin.")
+            return
+
+        self.refresh_animals_for_selected_customer(animal.customer_id)
+        self.refresh_account_history(animal.customer_id)
+
+    def _open_archived_animals_dialog(self) -> None:
+        customer_id = self._selected_customer_id
+        if customer_id is None or self._selected_customer_detail is None:
+            return
+        dialog = ArchivedAnimalsDialog(self)
+        try:
+            dialog.set_animals(self._load_archived_animals(customer_id))
+        except Exception:
+            LOGGER.exception("Archived animals could not be loaded")
+            dialog.set_animals([])
+            dialog.show_error("Arşivlenmiş hayvanlar yüklenemedi.")
+
+        def unarchive_animal(animal_id: int) -> None:
+            try:
+                with self._application_context.services() as services:
+                    services.animal.unarchive_animal(animal_id)
+            except ServiceError:
+                dialog.show_error("Hayvan geri açılamadı. Lütfen yeniden deneyin.")
+                return
+            except Exception:
+                LOGGER.exception("Animal %s could not be unarchived", animal_id)
+                dialog.show_error("Hayvan geri açılamadı. Lütfen yeniden deneyin.")
+                return
+
+            self.refresh_animals_for_selected_customer(
+                customer_id,
+                select_animal_id=animal_id,
+            )
+            try:
+                dialog.set_animals(self._load_archived_animals(customer_id))
+            except Exception:
+                LOGGER.exception("Archived animals could not be refreshed")
+                dialog.show_error("Arşivlenmiş hayvan listesi yenilenemedi.")
+
+        dialog.unarchive_requested.connect(unarchive_animal)
+        dialog.exec()
+        dialog.unarchive_requested.disconnect(unarchive_animal)
+        dialog.deleteLater()
+
+    def _load_archived_animals(self, customer_id: int) -> list[AnimalSummary]:
+        with self._application_context.services() as services:
+            return services.animal.list_archived_records(customer_id)
+
+    def _show_animal_operation_error(self, message: str) -> None:
+        QMessageBox.warning(self, "İşlem Tamamlanamadı", message)
 
     def _open_debt_transaction_dialog(self) -> None:
         detail = self._selected_customer_detail

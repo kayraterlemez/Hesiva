@@ -64,6 +64,19 @@ class AnimalOption:
 
 
 @dataclass(frozen=True, slots=True)
+class AnimalSummary:
+    """Immutable animal data used by active and archived customer workflows."""
+
+    animal_id: int
+    customer_id: int
+    ear_tag: str | None
+    name: str | None
+    species: str | None
+    notes: str | None
+    archived_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
 class AccountHistoryRow:
     """One immutable financial-history row with its chronological running balance."""
 
