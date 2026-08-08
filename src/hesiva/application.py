@@ -64,7 +64,7 @@ def main() -> int:
         )
         return 1
 
-    main_window = MainWindow()
+    main_window = MainWindow(application_context)
     main_window.show()
 
     try:

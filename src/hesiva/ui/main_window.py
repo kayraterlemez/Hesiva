@@ -1,6 +1,7 @@
+import logging
 from collections.abc import Iterable
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSignalBlocker, Qt, QTimer
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QComboBox,
@@ -9,6 +10,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMenu,
     QPushButton,
@@ -20,7 +22,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hesiva.composition import ApplicationContext
+from hesiva.read_models import CustomerSummary, CustomerSummarySort
+from hesiva.ui.presentation import format_balance_kurus, format_transaction_moment
 from hesiva.ui.theme import APPLICATION_STYLESHEET
+
+LOGGER = logging.getLogger(__name__)
 
 INITIAL_WINDOW_WIDTH = 1366
 INITIAL_WINDOW_HEIGHT = 768
@@ -29,6 +36,7 @@ MINIMUM_WINDOW_HEIGHT = 600
 CUSTOMER_PANE_INITIAL_WIDTH = 340
 CUSTOMER_PANE_MINIMUM_WIDTH = 280
 CUSTOMER_PANE_MAXIMUM_WIDTH = 460
+SEARCH_DEBOUNCE_MILLISECONDS = 200
 
 
 class EmptyState(QFrame):
@@ -39,23 +47,76 @@ class EmptyState(QFrame):
         self.setObjectName(object_name)
         self.setProperty("panel", True)
 
-        message_label = QLabel(message, self)
-        message_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        message_label.setProperty("emptyStateTitle", True)
-        message_label.setWordWrap(True)
+        self.message_label = QLabel(message, self)
+        self.message_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.message_label.setProperty("emptyStateTitle", True)
+        self.message_label.setWordWrap(True)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
         layout.addStretch()
-        layout.addWidget(message_label)
+        layout.addWidget(self.message_label)
         layout.addStretch()
+
+    def set_message(self, message: str) -> None:
+        self.message_label.setText(message)
+
+
+class CustomerListRow(QWidget):
+    """Lightweight visual row built exclusively from one plain customer summary."""
+
+    def __init__(self, summary: CustomerSummary, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setProperty("customerRow", True)
+        self.setMinimumHeight(58)
+
+        name_label = QLabel(summary.full_name, self)
+        name_label.setObjectName("customerRowName")
+        name_label.setProperty("customerRowName", True)
+
+        balance_label = QLabel(format_balance_kurus(summary.balance_kurus), self)
+        balance_label.setObjectName("customerRowBalance")
+        balance_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        balance_label.setProperty("customerRowBalance", True)
+        if summary.balance_kurus > 0:
+            balance_label.setProperty("balanceState", "debt")
+        elif summary.balance_kurus < 0:
+            balance_label.setProperty("balanceState", "overpayment")
+        else:
+            balance_label.setProperty("balanceState", "neutral")
+
+        last_transaction = format_transaction_moment(
+            summary.last_transaction_date,
+            summary.last_transaction_time,
+        )
+        last_transaction_label = QLabel(f"Son: {last_transaction}", self)
+        last_transaction_label.setObjectName("customerRowLastTransaction")
+        last_transaction_label.setProperty("muted", True)
+
+        top_row = QHBoxLayout()
+        top_row.setSpacing(10)
+        top_row.addWidget(name_label, 1)
+        top_row.addWidget(balance_label)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(2)
+        layout.addLayout(top_row)
+        layout.addWidget(last_transaction_label)
+
+        self.setAccessibleName(
+            f"{summary.full_name}, {balance_label.text()}, Son İşlem {last_transaction}"
+        )
 
 
 class MainWindow(QMainWindow):
-    """Resizable, data-independent shell for the Hesiva main window."""
+    """Resizable Hesiva shell bound to plain customer-summary read models."""
 
-    def __init__(self) -> None:
+    def __init__(self, application_context: ApplicationContext) -> None:
         super().__init__()
+        self._application_context = application_context
+        self._customer_summaries_by_id: dict[int, CustomerSummary] = {}
+        self._selected_customer_id: int | None = None
         self.setWindowTitle("Hesiva")
         self.setObjectName("mainWindow")
         self.setMinimumSize(MINIMUM_WINDOW_WIDTH, MINIMUM_WINDOW_HEIGHT)
@@ -69,6 +130,16 @@ class MainWindow(QMainWindow):
 
         QWidget.setTabOrder(self.customer_search_input, self.customer_sort_combo)
         QWidget.setTabOrder(self.customer_sort_combo, self.customer_list)
+
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(SEARCH_DEBOUNCE_MILLISECONDS)
+        self._search_timer.timeout.connect(self.refresh_customer_summaries)
+        self.customer_search_input.textChanged.connect(self._schedule_customer_search)
+        self.customer_sort_combo.currentIndexChanged.connect(self._customer_sort_changed)
+        self.customer_list.currentItemChanged.connect(self._customer_selection_changed)
+
+        self.refresh_customer_summaries()
 
     def _create_menu_bar(self) -> None:
         file_menu = self.menuBar().addMenu("Dosya")
@@ -157,12 +228,14 @@ class MainWindow(QMainWindow):
         self.customer_sort_combo = QComboBox(pane)
         self.customer_sort_combo.setObjectName("customerSortCombo")
         self.customer_sort_combo.setAccessibleName("Müşteri sıralaması")
-        self.customer_sort_combo.addItems(
-            ("En Yüksek Borç", "Ada Göre", "Son İşlem", "Kayıt Tarihi")
-        )
-        self.customer_sort_combo.setToolTip(
-            "Müşteri listesi bağlandığında sıralama ölçütünü belirler."
-        )
+        for label, sort in (
+            ("En Yüksek Borç", CustomerSummarySort.HIGHEST_DEBT),
+            ("Ada Göre", CustomerSummarySort.NAME),
+            ("Son İşlem", CustomerSummarySort.LAST_TRANSACTION),
+            ("Kayıt Tarihi", CustomerSummarySort.REGISTERED_ON),
+        ):
+            self.customer_sort_combo.addItem(label, sort.value)
+        self.customer_sort_combo.setToolTip("Müşteri listesinin sıralama ölçütünü belirler.")
         sort_label.setBuddy(self.customer_sort_combo)
         sort_row.addWidget(self.customer_sort_combo, 1)
         layout.addLayout(sort_row)
@@ -190,11 +263,17 @@ class MainWindow(QMainWindow):
         self.customer_list.setAccessibleName("Müşteri listesi")
         self.customer_list_stack.addWidget(self.customer_empty_state)
         self.customer_list_stack.addWidget(self.customer_list)
+        self.customer_error_state = EmptyState(
+            "Müşteriler yüklenemedi. Lütfen yeniden deneyin.",
+            object_name="customerListErrorState",
+            parent=self.customer_list_stack,
+        )
+        self.customer_list_stack.addWidget(self.customer_error_state)
         self.customer_list_stack.setCurrentWidget(self.customer_empty_state)
         layout.addWidget(self.customer_list_stack, 1)
 
         footer = QHBoxLayout()
-        self.customer_count_label = QLabel("Bulunan: 0 kayıt", pane)
+        self.customer_count_label = QLabel("Bulunan: 0 müşteri", pane)
         self.customer_count_label.setObjectName("customerCountLabel")
         self.customer_count_label.setProperty("muted", True)
         footer.addWidget(self.customer_count_label)
@@ -259,6 +338,7 @@ class MainWindow(QMainWindow):
         self.customer_phone_label = QLabel("Telefon:", header)
         self.customer_phone_label.setObjectName("customerPhoneLabel")
         self.customer_phone_label.setProperty("muted", True)
+        self.customer_phone_label.hide()
         self.last_transaction_label = QLabel("Son İşlem:", header)
         self.last_transaction_label.setObjectName("lastTransactionLabel")
         self.last_transaction_label.setProperty("muted", True)
@@ -300,3 +380,100 @@ class MainWindow(QMainWindow):
             self.customer_tabs.addTab(tab, label)
         layout.addWidget(self.customer_tabs, 1)
         return shell
+
+    def refresh_customer_summaries(self) -> None:
+        """Reload active summaries using the current search and sort controls."""
+        selected_customer_id = self._selected_customer_id
+        sort = CustomerSummarySort(self.customer_sort_combo.currentData())
+        query = self.customer_search_input.text()
+
+        try:
+            with self._application_context.services() as services:
+                summaries = services.customer_summary.list_customer_summaries(
+                    query=query,
+                    sort=sort,
+                )
+        except Exception:
+            LOGGER.exception("Customer summaries could not be loaded")
+            self._show_customer_load_error()
+            return
+
+        self._customer_summaries_by_id = {summary.customer_id: summary for summary in summaries}
+        blocker = QSignalBlocker(self.customer_list)
+        self.customer_list.clear()
+        selected_row: int | None = None
+        for row_index, summary in enumerate(summaries):
+            item = QListWidgetItem()
+            item.setData(Qt.ItemDataRole.UserRole, summary.customer_id)
+            row_widget = CustomerListRow(summary, self.customer_list)
+            item.setSizeHint(row_widget.sizeHint())
+            self.customer_list.addItem(item)
+            self.customer_list.setItemWidget(item, row_widget)
+            if summary.customer_id == selected_customer_id:
+                selected_row = row_index
+
+        if selected_row is not None:
+            self.customer_list.setCurrentRow(selected_row)
+        del blocker
+
+        self.customer_count_label.setText(f"Bulunan: {len(summaries)} müşteri")
+        if summaries:
+            self.customer_list_stack.setCurrentWidget(self.customer_list)
+        else:
+            message = (
+                "Arama sonucu bulunamadı." if query.strip() else "Henüz müşteri kaydı bulunmuyor."
+            )
+            self.customer_empty_state.set_message(message)
+            self.customer_list_stack.setCurrentWidget(self.customer_empty_state)
+
+        if selected_row is not None:
+            self._show_selected_customer(self._customer_summaries_by_id[selected_customer_id])
+        else:
+            self._show_no_customer_selected()
+
+    def _schedule_customer_search(self, _text: str) -> None:
+        self._search_timer.start()
+
+    def _customer_sort_changed(self, _index: int) -> None:
+        self.refresh_customer_summaries()
+
+    def _customer_selection_changed(
+        self,
+        current: QListWidgetItem | None,
+        _previous: QListWidgetItem | None,
+    ) -> None:
+        if current is None:
+            self._show_no_customer_selected()
+            return
+
+        customer_id = current.data(Qt.ItemDataRole.UserRole)
+        summary = self._customer_summaries_by_id.get(customer_id)
+        if summary is None:
+            self._show_no_customer_selected()
+            return
+        self._show_selected_customer(summary)
+
+    def _show_selected_customer(self, summary: CustomerSummary) -> None:
+        self._selected_customer_id = summary.customer_id
+        self.customer_name_label.setText(summary.full_name)
+        self.balance_value_label.setText(format_balance_kurus(summary.balance_kurus))
+        last_transaction = format_transaction_moment(
+            summary.last_transaction_date,
+            summary.last_transaction_time,
+        )
+        self.last_transaction_label.setText(f"Son İşlem: {last_transaction}")
+        self.customer_detail_stack.setCurrentWidget(self.customer_detail_shell)
+
+    def _show_no_customer_selected(self) -> None:
+        self._selected_customer_id = None
+        self.customer_name_label.clear()
+        self.balance_value_label.clear()
+        self.last_transaction_label.setText("Son İşlem:")
+        self.customer_detail_stack.setCurrentWidget(self.no_customer_selected_state)
+
+    def _show_customer_load_error(self) -> None:
+        self._customer_summaries_by_id = {}
+        self.customer_list.clear()
+        self.customer_count_label.setText("Bulunan: -")
+        self.customer_list_stack.setCurrentWidget(self.customer_error_state)
+        self._show_no_customer_selected()

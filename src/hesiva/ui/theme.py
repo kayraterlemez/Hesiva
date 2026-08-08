@@ -154,13 +154,38 @@ QListWidget {
 
 QListWidget::item {
     border-bottom: 1px solid #e1e5e9;
-    padding: 8px;
+    padding: 0;
 }
 
 QListWidget::item:selected {
     color: #173d65;
     background: #e3effb;
     border-left: 3px solid #66b7ee;
+}
+
+QWidget[customerRow="true"] {
+    background: transparent;
+}
+
+QLabel[customerRowName="true"] {
+    color: #263442;
+    font-weight: 700;
+}
+
+QLabel[customerRowBalance="true"] {
+    font-weight: 700;
+}
+
+QLabel[balanceState="debt"] {
+    color: #b4232e;
+}
+
+QLabel[balanceState="overpayment"] {
+    color: #237a4b;
+}
+
+QLabel[balanceState="neutral"] {
+    color: #6f7a85;
 }
 
 QTabWidget::pane {
