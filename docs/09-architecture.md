@@ -407,6 +407,10 @@ Reminder
 
 Customers and animals use nullable archive timestamps rather than Boolean archive flags. Reminders use completion/cancellation timestamps rather than a Boolean status so the application preserves when those events occurred.
 
+Customer and animal archiving is reversible by setting `archived_at` back to NULL. Unarchiving a
+customer does not cascade to its animals. An archived animal may be unarchived only when its owning
+customer is active; the parent is never unarchived implicitly.
+
 Version 1 intentionally does not contain:
 
 - TransactionItem entities
@@ -599,7 +603,10 @@ The UI must not manually subtract the payment from the visible balance.
 
 The displayed balance is refreshed from application data after the payment has been successfully committed.
 
-Payments larger than the current positive balance are valid; the resulting negative balance represents customer credit.
+Payments larger than the current positive balance are valid; the resulting negative balance
+represents customer credit. The service and persistence layers retain that signed negative value.
+The presentation layer displays its absolute amount as **Fazla Ödeme**; positive balances are
+**Borç**, and zero is neutral.
 
 # Animal Flow
 

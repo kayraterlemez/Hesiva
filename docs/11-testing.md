@@ -446,9 +446,11 @@ Expected balance:
 -200 TL
 ```
 
-The negative balance represents customer credit.
+The negative internal balance represents customer credit. The UI presents it without the minus sign
+as **200 TL Fazla Ödeme**. Positive balances use **Borç**, and zero is neutral.
 
-Tests must verify that overpayment is not silently clamped to zero and that reports/search/sorting handle negative balances consistently.
+Tests must verify that overpayment is not silently clamped to zero, that reports/search/sorting
+handle negative balances consistently, and that presentation does not mutate the signed value.
 
 # Zero Amount
 
@@ -621,6 +623,7 @@ Customer tests should include:
 - Read customer
 - Update customer
 - Archive customer
+- Unarchive customer
 - Search customer
 - Customer with optional fields missing
 - Multiple customers with identical names
@@ -644,7 +647,10 @@ Archiving a customer must not delete:
 - Reminders
 - Historical information
 
-Tests should verify that `archived_at IS NULL` represents an active customer, setting `archived_at` archives the customer without deleting history, and archived customers are hidden or displayed according to UI rules while their history remains intact.
+Tests should verify that `archived_at IS NULL` represents an active customer, setting `archived_at`
+archives the customer without deleting history, and unarchiving restores NULL idempotently. Customer
+unarchive must not change child animal archive states. Archived customers must remain accessible to
+the explicit unarchive workflow while their history remains intact.
 
 ---
 
@@ -656,6 +662,7 @@ Animal tests should include:
 - Retrieve customer's animals
 - Update animal
 - Archive animal using `archived_at`
+- Unarchive animal using `archived_at`
 - Optional ear tag
 - Optional animal name
 - Transaction without animal
@@ -666,6 +673,10 @@ Most importantly:
 > A transaction must not be associated with an animal owned by another customer.
 
 This rule requires an automated test.
+
+Tests must also verify that animal unarchive is idempotent for an active owner and is rejected while
+the owning customer remains archived. Rejection must leave both archive states unchanged and must
+not implicitly unarchive the customer.
 
 Example:
 
@@ -1206,7 +1217,7 @@ Special cases should include:
 
 - Equal balances
 - Zero balance
-- Negative balance if allowed
+- Negative balance, presented by absolute amount as **Fazla Ödeme**
 - Customers with no transactions
 
 ---

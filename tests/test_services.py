@@ -160,6 +160,8 @@ def test_customer_service_missing_customer_operations_raise_clear_error(
         service.update_customer(999, full_name="Missing")
     with pytest.raises(CustomerNotFoundError):
         service.archive_customer(999)
+    with pytest.raises(CustomerNotFoundError):
+        service.unarchive_customer(999)
 
 
 def test_customer_service_archive_is_idempotent_and_preserves_record(
@@ -178,6 +180,47 @@ def test_customer_service_archive_is_idempotent_and_preserves_record(
     assert service.list_active_customers() == []
     with Session(engine) as verification_session:
         assert verification_session.get(Customer, customer.id) is not None
+
+
+def test_customer_service_unarchive_is_idempotent_and_commits(
+    database: tuple[Engine, Session],
+) -> None:
+    engine, session = database
+    service = customer_service(session)
+    customer = service.create_customer("Customer to Unarchive")
+
+    assert service.unarchive_customer(customer.id).archived_at is None
+    service.archive_customer(customer.id)
+    assert customer.archived_at is not None
+
+    assert service.unarchive_customer(customer.id).archived_at is None
+    assert service.unarchive_customer(customer.id).archived_at is None
+    assert service.list_active_customers() == [customer]
+    with Session(engine) as verification_session:
+        persisted_customer = verification_session.get(Customer, customer.id)
+        assert persisted_customer is not None
+        assert persisted_customer.archived_at is None
+
+
+def test_customer_service_unarchive_does_not_unarchive_animals(
+    database: tuple[Engine, Session],
+) -> None:
+    engine, session = database
+    customers = customer_service(session)
+    animals = animal_service(session)
+    customer = customers.create_customer("Customer with Archived Animal")
+    animal = animals.create_animal(customer.id, name="Archived Child Animal")
+    animals.archive_animal(animal.id)
+    customers.archive_customer(customer.id)
+
+    customers.unarchive_customer(customer.id)
+
+    assert customer.archived_at is None
+    assert animal.archived_at is not None
+    with Session(engine) as verification_session:
+        persisted_animal = verification_session.get(Animal, animal.id)
+        assert persisted_animal is not None
+        assert persisted_animal.archived_at is not None
 
 
 def test_animal_service_creates_optional_animal_for_active_customer(
@@ -266,8 +309,56 @@ def test_animal_service_missing_animal_and_customer_list_raise_clear_errors(
         service.update_animal(999, name="Missing")
     with pytest.raises(AnimalNotFoundError):
         service.archive_animal(999)
+    with pytest.raises(AnimalNotFoundError):
+        service.unarchive_animal(999)
     with pytest.raises(CustomerNotFoundError):
         service.list_for_customer(999)
+
+
+def test_animal_service_unarchive_is_idempotent_for_active_customer(
+    database: tuple[Engine, Session],
+) -> None:
+    engine, session = database
+    customer = customer_service(session).create_customer("Active Animal Owner")
+    service = animal_service(session)
+    animal = service.create_animal(customer.id, name="Animal to Unarchive")
+
+    assert service.unarchive_animal(animal.id).archived_at is None
+    service.archive_animal(animal.id)
+    assert animal.archived_at is not None
+
+    assert service.unarchive_animal(animal.id).archived_at is None
+    assert service.unarchive_animal(animal.id).archived_at is None
+    assert service.list_for_customer(customer.id) == [animal]
+    with Session(engine) as verification_session:
+        persisted_animal = verification_session.get(Animal, animal.id)
+        assert persisted_animal is not None
+        assert persisted_animal.archived_at is None
+
+
+def test_animal_service_rejects_unarchive_while_customer_is_archived(
+    database: tuple[Engine, Session],
+) -> None:
+    engine, session = database
+    customers = customer_service(session)
+    animals = animal_service(session)
+    customer = customers.create_customer("Archived Animal Owner")
+    animal = animals.create_animal(customer.id, name="Archived Animal")
+    animals.archive_animal(animal.id)
+    customers.archive_customer(customer.id)
+
+    with pytest.raises(InvalidStateTransitionError, match="customer is archived"):
+        animals.unarchive_animal(animal.id)
+
+    assert animal.archived_at is not None
+    assert customer.archived_at is not None
+    with Session(engine) as verification_session:
+        persisted_animal = verification_session.get(Animal, animal.id)
+        persisted_customer = verification_session.get(Customer, customer.id)
+        assert persisted_animal is not None
+        assert persisted_animal.archived_at is not None
+        assert persisted_customer is not None
+        assert persisted_customer.archived_at is not None
 
 
 def test_transaction_service_creates_debt_and_payment_with_expected_signs(

@@ -92,6 +92,23 @@ class AnimalService:
             raise
         return animal
 
+    def unarchive_animal(self, animal_id: int) -> Animal:
+        animal = self.get_animal(animal_id)
+
+        try:
+            if animal.archived_at is not None:
+                customer = self._get_customer(animal.customer_id)
+                if customer.archived_at is not None:
+                    raise InvalidStateTransitionError(
+                        "An animal cannot be unarchived while its customer is archived."
+                    )
+                animal.archived_at = None
+            self._session.commit()
+        except Exception:
+            self._session.rollback()
+            raise
+        return animal
+
     def get_animal(self, animal_id: int) -> Animal:
         animal = self._animal_repository.get_by_id(animal_id)
         if animal is None:

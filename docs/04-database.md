@@ -71,7 +71,9 @@ Financial direction is represented by the sign:
 - Negative amount → payment/credit
 - Zero → invalid financial movement
 
-A negative final customer balance is allowed and represents customer credit.
+A negative final customer balance is allowed and represents customer credit. The stored and
+service-layer value remains negative; presentation shows its absolute amount labeled **Fazla
+Ödeme**. Positive balances are presented as **Borç**, and zero is neutral.
 
 ---
 
@@ -153,7 +155,9 @@ A customer may own zero or more animals, financial transactions, and reminders.
 - Human names are not unique; two customers may have the same name.
 - `legacy_id` is normally NULL for customers created directly in Hesiva.
 - Customers are archived rather than physically deleted. `archived_at IS NULL` means active; a non-NULL value means archived and records when archiving occurred.
+- Customer archiving is reversible. Unarchiving sets `archived_at` to NULL and is idempotent.
 - Archiving a customer does not delete animals, reminders, or transactions.
+- Unarchiving a customer does not automatically unarchive its animals or alter reminders or transactions.
 - Customer balance is calculated from active transactions.
 - Last activity is calculated from the most recent non-voided transaction business date.
 
@@ -195,6 +199,8 @@ Hesiva Version 1 is not a medical record system.
 - A financial transaction may reference an animal.
 - A transaction's animal must belong to the same customer as the transaction.
 - Animals are archived rather than physically deleted when history references them. `archived_at IS NULL` means active.
+- Animal archiving is reversible. Unarchiving sets `archived_at` to NULL and is idempotent.
+- An archived animal may be unarchived only while its owning customer is active. The parent customer is never unarchived automatically.
 
 ---
 
@@ -245,7 +251,8 @@ with optional animal and note information.
 - Positive amounts increase outstanding debt.
 - Negative amounts reduce outstanding debt.
 - Payments are not allocated to individual debt transactions.
-- A negative total balance is valid and represents customer credit.
+- A negative total balance is valid and represents customer credit. It remains negative internally;
+  the UI displays the absolute amount as **Fazla Ödeme**.
 - A transaction may optionally reference an animal belonging to the same customer.
 - New transactions may set `transaction_time` automatically to the current local time; the user does not need to enter it manually.
 - Legacy import may preserve the original legacy time when valid.

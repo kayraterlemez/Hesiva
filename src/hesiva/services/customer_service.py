@@ -81,6 +81,18 @@ class CustomerService:
             raise
         return customer
 
+    def unarchive_customer(self, customer_id: int) -> Customer:
+        customer = self.get_customer(customer_id)
+
+        try:
+            if customer.archived_at is not None:
+                customer.archived_at = None
+            self._session.commit()
+        except Exception:
+            self._session.rollback()
+            raise
+        return customer
+
     def get_customer(self, customer_id: int) -> Customer:
         customer = self._customer_repository.get_by_id(customer_id)
         if customer is None:

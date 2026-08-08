@@ -92,6 +92,7 @@ Tasks:
 - Create customer
 - Edit customer
 - Archive customer
+- Unarchive customer without cascading to animals
 - Customer search
 - Customer sorting
 - Customer filtering
@@ -102,7 +103,7 @@ Tasks:
 
 Expected result:
 
-Customer records can be created, found, edited, and archived without losing history.
+Customer records can be created, found, edited, archived, and unarchived without losing history.
 
 ---
 
@@ -120,6 +121,7 @@ Tasks:
 - Correct an incorrect transaction by voiding it and creating a new transaction when required
 - Preserve voided transactions as history without modifying them in place
 - Automatic balance calculation from active history
+- Present negative balances as absolute **Fazla Ödeme** amounts without changing signed storage
 - Transaction history
 - Free-text descriptions
 - Optional notes
@@ -145,6 +147,7 @@ Tasks:
 - Add animal
 - Edit animal
 - Archive animal
+- Unarchive animal only while its customer is active
 - Associate animals with customers
 - Store ear tag numbers
 - Store optional name/species/notes

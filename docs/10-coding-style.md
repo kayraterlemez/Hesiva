@@ -431,6 +431,11 @@ Formatting integer kuruş into Turkish Lira must also use a dedicated helper.
 
 Do not scatter money conversion/sign logic across UI widgets.
 
+Balance presentation must not change the signed domain value. A positive balance is displayed as
+**Borç**, zero is neutral, and a negative balance is formatted from its absolute magnitude as
+**Fazla Ödeme**. **Alacak** is reserved for historically accurate legacy-field references, not the
+normal negative-balance UI label.
+
 # Dates and Times
 
 Use Python standard date/time types internally.

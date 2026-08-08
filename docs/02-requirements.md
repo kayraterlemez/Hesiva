@@ -36,6 +36,9 @@ The application shall allow users to archive customers without deleting their hi
 
 Archived customers shall retain their transactions, animals, and reminders.
 
+The application shall allow an archived customer to be unarchived. Unarchiving sets
+`archived_at` back to NULL and does not automatically unarchive any animals.
+
 Priority: High
 
 ---
@@ -109,6 +112,9 @@ Priority: Critical
 ### REQ-010
 
 Animals shall be archived rather than physically deleted when historical transactions reference them.
+
+The application shall allow an archived animal to be unarchived only while its owning customer is
+active. It shall not automatically unarchive the owning customer.
 
 Priority: High
 
@@ -210,7 +216,13 @@ Priority: Critical
 
 The application shall support negative customer balances.
 
-A negative balance represents customer credit and may occur after an overpayment or after importing valid legacy history.
+A negative balance represents customer credit and may occur after an overpayment or after importing
+valid legacy history. Internal balance values remain signed: positive is debt, zero is neutral, and
+negative is overpayment/customer credit.
+
+The user interface shall present a positive balance as **Borç**, zero as a neutral zero balance, and
+a negative balance as its absolute amount labeled **Fazla Ödeme**. **Alacak** shall not be used as
+the normal user-facing negative-balance label.
 
 Priority: High
 

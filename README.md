@@ -40,6 +40,7 @@ Hesiva V1 aşağıdaki temel alanları kapsar.
 - düzenleme
 - arama
 - arşivleme
+- arşivden çıkarma
 - müşteri bazlı hesap görünümü
 
 ### Hesap hareketleri
@@ -57,6 +58,10 @@ Finansal hareketler signed integer kuruş olarak saklanır:
 - negatif değer = ödeme
 
 Bakiye, işlem geçmişinden hesaplanır ve müşteri kaydında ayrı bir alan olarak tutulmaz.
+
+Kullanıcı arayüzünde pozitif bakiye **Borç**, sıfır bakiye nötr `0,00 TL`, negatif bakiye ise
+işaretsiz mutlak tutarıyla **Fazla Ödeme** olarak gösterilir. İç hesaplama signed integer kuruş
+semantiğini korur.
 
 ### İşlem düzeltme politikası
 
@@ -79,8 +84,13 @@ Bu yaklaşım finansal geçmişin sessizce değiştirilmesini önler.
 - tür
 - notlar
 - arşivleme
+- arşivden çıkarma
 
 Hayvan kaydı finansal işlem için zorunlu değildir.
+
+Arşivleme fiziksel silme değildir. Müşteri ve hayvan kayıtları sonradan arşivden çıkarılabilir;
+ancak müşteriyi arşivden çıkarmak hayvanlarını otomatik olarak çıkarmaz ve arşivdeki bir müşterinin
+hayvanı müşteri aktif edilmeden arşivden çıkarılamaz.
 
 ### Hatırlatmalar
 
