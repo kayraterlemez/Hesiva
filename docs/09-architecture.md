@@ -1134,13 +1134,29 @@ Examples:
 
 # Packaging
 
-The application should be distributable without requiring the user to configure a Python development environment.
+Hesiva uses a reviewable PyInstaller `onedir` specification. The frozen executable starts through
+`hesiva.__main__` and therefore reaches the same `hesiva.application.main()` used by
+`python -m hesiva`. PyInstaller is a development/build dependency, not an end-user runtime
+dependency.
 
 Linux is the primary packaging target.
 
-Windows packages may be generated separately.
+Windows packages are generated and validated separately on Windows; PyInstaller cross-compilation
+from Linux is not treated as validation.
 
 Application data must remain separate from application binaries so that reinstalling or updating the application does not delete user records.
+
+The bundle includes distribution metadata for `get_application_version()` and the physical Alembic
+`env.py`, `script.py.mako`, and `versions/` resources used dynamically during database startup.
+Imports visible only inside the migration environment are declared to the freezer explicitly. The
+spec rejects stale installed package metadata and replaces host-selected x86-64-v3 system-library
+variants with baseline variants for the old-hardware target. Release builds must still be produced
+on an appropriately old glibc baseline because this substitution does not lower symbol-version
+requirements.
+
+Tests, test fixtures, source documents, user databases, credentials, backup archives, reports, and
+private legacy files are not runtime resources. A separate development-only frozen smoke entry
+exercises production APIs without adding a debug path to the user executable.
 
 ---
 

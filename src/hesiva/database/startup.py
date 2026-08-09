@@ -17,6 +17,11 @@ from hesiva.database.durability import sync_parent_directory
 from hesiva.models import model_metadata
 
 MIGRATION_DIRECTORY = Path(__file__).resolve().parent / "migrations"
+REQUIRED_MIGRATION_RESOURCES = (
+    "env.py",
+    "script.py.mako",
+    "versions",
+)
 ALEMBIC_VERSION_TABLE = "alembic_version"
 LOGGER = logging.getLogger(__name__)
 
@@ -60,7 +65,7 @@ def create_alembic_config(database_path: Path) -> Config:
 
     database_url = URL.create("sqlite+pysqlite", database=str(resolved_path))
     config = Config(stdout=StringIO())
-    config.set_main_option("script_location", _escape_config_value(str(MIGRATION_DIRECTORY)))
+    config.set_main_option("script_location", _escape_config_value(str(get_migration_directory())))
     config.set_main_option(
         "sqlalchemy.url",
         _escape_config_value(database_url.render_as_string(hide_password=False)),
@@ -75,6 +80,16 @@ def get_migration_head() -> str:
     if len(heads) != 1:
         raise DatabaseStartupError("Hesiva requires exactly one Alembic migration head.")
     return heads[0]
+
+
+def get_migration_directory() -> Path:
+    """Return and validate source-tree or frozen Alembic resources."""
+    missing = [
+        name for name in REQUIRED_MIGRATION_RESOURCES if not (MIGRATION_DIRECTORY / name).exists()
+    ]
+    if missing:
+        raise DatabaseStartupError("Required Hesiva migration resources are unavailable.")
+    return MIGRATION_DIRECTORY
 
 
 def inspect_database(database_path: Path) -> DatabaseStatus:
@@ -298,5 +313,5 @@ def _escape_config_value(value: str) -> str:
 
 def _create_script_config() -> Config:
     config = Config(stdout=StringIO())
-    config.set_main_option("script_location", _escape_config_value(str(MIGRATION_DIRECTORY)))
+    config.set_main_option("script_location", _escape_config_value(str(get_migration_directory())))
     return config

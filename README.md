@@ -170,7 +170,9 @@ Hesiva V1 bilinçli olarak şunları içermez:
 
 ### Paketleme
 
-- PyInstaller planlanmaktadır
+- PyInstaller `onedir` paketleme temeli bulunmaktadır
+- Linux x86_64 birincil build hedefidir
+- Windows x86_64 build'i Windows üzerinde ayrıca doğrulanacaktır
 
 ## Mimari
 
@@ -306,26 +308,9 @@ Destructive aksiyonlar Enter'a varsayılan olarak bağlanmaz.
 
 ## Geliştirme durumu
 
-Şu anda tamamlanan temel katmanlar:
-
-- proje iskeleti
-- SQLite / SQLAlchemy altyapısı
-- Alembic migration sistemi
-- production database path yönetimi
-- güvenli database startup
-- domain modelleri
-- repository katmanı
-- service katmanı
-- transaction / payment / void iş kuralları
-- test altyapısı
-- V1 UI Freeze
-- Cari → Hesiva proje rename'i
-
-Sıradaki geliştirme aşaması:
-
-**UI Foundation + Main Window Shell**
-
-Daha sonra müşteri yönetimi ve diğer kullanıcı iş akışları sırayla gerçek UI'ya bağlanacaktır.
+Temel V1 iş akışları ve Linux PyInstaller `onedir` paketleme temeli uygulanmıştır. Bu çalışma henüz
+nihai V1 yayın ilanı değildir; hedef Linux ortamı/eski donanım ve gerçek Windows build doğrulaması
+tamamlanmalıdır.
 
 ## Kurulum
 
@@ -367,6 +352,16 @@ Format kontrolü:
 
     ruff format --check .
 
+Linux `onedir` paketi (önce test/lint doğrulaması çalışır):
+
+    scripts/build_linux.sh
+
+Oluşan paketi izole kullanıcı verisiyle doğrulamak için:
+
+    scripts/smoke_packaged_linux.sh
+
+Paketleme, platform sınırlamaları ve yayın kontrol listesi için `docs/12-release.md` dosyasına bakın.
+
 ## Proje dokümantasyonu
 
 Detaylı tasarım ve teknik kararlar `docs/` klasöründedir.
@@ -382,6 +377,7 @@ Detaylı tasarım ve teknik kararlar `docs/` klasöründedir.
 - `docs/09-architecture.md` — yazılım mimarisi
 - `docs/10-coding-style.md` — kod standartları
 - `docs/11-testing.md` — test yaklaşımı
+- `docs/12-release.md` — paketleme ve yayın hazırlığı
 - `docs/design/V1UIFreeze.pdf` — frozen V1 görsel referansı
 
 ## Geliştirme prensipleri

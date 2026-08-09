@@ -1462,6 +1462,35 @@ Before a Windows build is considered usable, test:
 
 Linux-specific assumptions must not leak into general business logic.
 
+# Packaged Runtime Testing
+
+Source tests are necessary but do not prove that dynamic Alembic resources, Qt plugins, package
+metadata, or native libraries survived freezing. A release candidate therefore follows this order:
+
+```text
+pytest and Ruff
+        ↓
+clean PyInstaller onedir build
+        ↓
+actual user executable launch with isolated HOME/XDG_DATA_HOME
+        ↓
+separately frozen end-to-end runtime smoke
+        ↓
+bundle-content and shared-library inspection
+```
+
+The packaged smoke covers fresh database migration, first password creation, empty setup, reopen and
+login, password change, customer/debt/balance behavior, PDF output, backup/restore of database and
+configuration, Settings/About/version, and synthetic Veresiye 5 import. It verifies that the release
+tree remains byte-identical and that no user state appears beside the executable. The synthetic
+legacy builder exists only in the development smoke bundle, never in the production artifact.
+
+Linux smoke on one development host is not a clean-machine compatibility claim. Before release,
+repeat it on the selected older glibc baseline, the representative Intel i3-540/4 GB system, and the
+chosen Linux desktop/print environment. Windows requires a native Windows x86_64 build followed by
+the corresponding startup, path, authentication, CRUD, PDF/print, backup/restore, import, and
+uninstall-preservation checks.
+
 ---
 
 # Automated Test Command

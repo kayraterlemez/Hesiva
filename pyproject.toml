@@ -20,6 +20,7 @@ hesiva = "hesiva.application:main"
 
 [project.optional-dependencies]
 dev = [
+    "PyInstaller>=6.11,<7",
     "pytest",
     "ruff",
 ]

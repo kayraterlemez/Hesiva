@@ -25,6 +25,8 @@ dist/
 *.egg-info/
 .eggs/
 *.whl
+*.deb
+*.tar.gz
 
 # Local databases and SQLite sidecar files
 *.db

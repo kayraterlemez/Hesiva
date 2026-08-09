@@ -291,6 +291,10 @@ Tasks:
 - Verify reports
 - Verify the minimal Settings and About flows
 - Verify the preferred manual-backup destination and authoritative version display
+- Build the repeatable Linux x86_64 PyInstaller `onedir` candidate
+- Run the frozen-runtime smoke suite with isolated user-data directories
+- Rebuild on a release-compatible older glibc baseline and test representative hardware
+- Build and validate Windows separately on a clean Windows x86_64 system
 - Review logs for sensitive data
 - Remove unused/debug code
 - Update documentation
@@ -300,6 +304,11 @@ No new Version 1 features are introduced during this phase.
 Settings remains limited to password change, preferred manual-backup location, and application
 version. Release licensing/copyright metadata and any separate build identifier remain deferred to
 release preparation.
+
+The packaging foundation produces a locally exercised Linux `onedir` candidate at version 0.1.0.
+It does not promote the project to Version 1.0 or establish final release readiness. Desktop package
+metadata remains blocked until an authoritative icon, maintainer identity, and license decision are
+available.
 
 Expected result:
 
