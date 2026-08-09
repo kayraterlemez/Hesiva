@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Hesiva
+Comment=Veteriner müşteri hesap ve bakiye takip uygulaması
+Exec=hesiva
+Icon=hesiva
+Terminal=false
+Categories=Office;Finance;

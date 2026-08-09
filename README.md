@@ -171,6 +171,8 @@ Hesiva V1 bilinçli olarak şunları içermez:
 ### Paketleme
 
 - PyInstaller `onedir` paketleme temeli bulunmaktadır
+- Linux masaüstü girdisi ve hicolor ikon kaynakları bulunmaktadır
+- Debian paket adı `hesiva`, lisansı MIT ve paket sorumlusu Kayra Terlemez'dir
 - Linux x86_64 birincil build hedefidir
 - Windows x86_64 build'i Windows üzerinde ayrıca doğrulanacaktır
 
@@ -360,6 +362,10 @@ Oluşan paketi izole kullanıcı verisiyle doğrulamak için:
 
     scripts/smoke_packaged_linux.sh
 
+Debian paketleme araçlarının bulunduğu uyumlu bir Linux build ortamında geliştirme `.deb` paketi:
+
+    scripts/build_deb.sh
+
 Paketleme, platform sınırlamaları ve yayın kontrol listesi için `docs/12-release.md` dosyasına bakın.
 
 ## Proje dokümantasyonu
@@ -407,4 +413,4 @@ Hedef donanım düşük kaynaklı eski bilgisayarları da kapsar. Bu nedenle ağ
 
 ## Lisans
 
-Projenin lisans durumu netleştiğinde burada belirtilecektir.
+Hesiva, [MIT Lisansı](LICENSE) ile lisanslanmıştır.

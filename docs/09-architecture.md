@@ -941,8 +941,9 @@ failed publication.
 
 The runtime application version is resolved from the package metadata generated from
 `pyproject.toml` `project.version`, with source-tree execution reading that same project metadata.
-There is no independent V1 build identifier or duplicated UI version constant. License and
-copyright display is deferred until release preparation establishes authoritative metadata.
+There is no independent V1 build identifier or duplicated UI version constant. `LICENSE` and
+`pyproject.toml` identify the project as MIT licensed, and About shows the concise **MIT Lisansı**
+label without duplicating the legal text or inventing publisher metadata.
 
 Platform-specific application directories must be used instead of the installation directory.
 
@@ -1157,6 +1158,12 @@ requirements.
 Tests, test fixtures, source documents, user databases, credentials, backup archives, reports, and
 private legacy files are not runtime resources. A separate development-only frozen smoke entry
 exercises production APIs without adding a debug path to the user executable.
+
+The immutable master icon is `assets/hesiva-icon.png`. Source execution resolves that file from the
+repository; PyInstaller bundles it under the frozen `hesiva/assets` resource tree. The Debian layout
+keeps the `onedir` runtime in `/opt/hesiva`, exposes a fixed `/usr/bin/hesiva` launcher, and installs
+desktop/hicolor metadata under `/usr/share`. None of these package-managed paths contains mutable
+application data.
 
 ---
 

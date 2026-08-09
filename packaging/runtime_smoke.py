@@ -15,7 +15,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication, QDialog  # noqa: E402
 
-from hesiva.application import create_application_context  # noqa: E402
+from hesiva.application import apply_application_icon, create_application_context  # noqa: E402
 from hesiva.database.paths import get_application_data_directory  # noqa: E402
 from hesiva.ui.auth_dialogs import (  # noqa: E402
     DatabaseChoiceDialog,
@@ -199,6 +199,8 @@ def main() -> int:
     work_root = Path(sys.argv[1]).resolve()
     work_root.mkdir(mode=0o700, parents=True, exist_ok=True)
     application = QApplication.instance() or QApplication([])
+    _require(apply_application_icon(application), "Packaged application icon is unavailable.")
+    _require(not application.windowIcon().isNull(), "Packaged application icon is invalid.")
     _exercise_first_run(application, work_root)
     _exercise_reopen(application)
     _exercise_legacy_import(work_root)

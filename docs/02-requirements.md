@@ -434,8 +434,8 @@ Priority: High
 Version 1 Settings contains only password change, preferred manual-backup location, and the current
 application version. About displays **Hesiva**, the version obtained from `pyproject.toml`
 `project.version`, and **Veteriner müşteri hesap ve bakiye takip uygulaması.** Version 1 has no
-separate build identifier. License and copyright presentation is deferred until release licensing
-is decided.
+separate build identifier. About identifies the authoritative release license concisely as
+**MIT Lisansı**; the complete legal text remains in `LICENSE`.
 
 ---
 

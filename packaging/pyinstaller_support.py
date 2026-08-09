@@ -1,6 +1,7 @@
 """Shared, non-runtime PyInstaller configuration helpers."""
 
 import tomllib
+import sys
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -10,6 +11,9 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOT = REPOSITORY_ROOT / "src"
 MIGRATION_SOURCE = SOURCE_ROOT / "hesiva" / "database" / "migrations"
 MIGRATION_DESTINATION = "hesiva/database/migrations"
+APPLICATION_ICON_SOURCE = REPOSITORY_ROOT / "assets" / "hesiva-icon.png"
+APPLICATION_ICON_DESTINATION = "hesiva/assets"
+WINDOWS_ICON_SOURCE = REPOSITORY_ROOT / "packaging" / "icons" / "hesiva.ico"
 
 DEVELOPMENT_EXCLUDES = (
     "pytest",
@@ -32,8 +36,18 @@ def hesiva_datas() -> list[tuple[str, str]]:
     verify_build_metadata()
     return [
         (str(MIGRATION_SOURCE), MIGRATION_DESTINATION),
+        (str(APPLICATION_ICON_SOURCE), APPLICATION_ICON_DESTINATION),
         *copy_metadata("hesiva"),
     ]
+
+
+def executable_icon() -> str | None:
+    """Return the native Windows executable icon; Linux uses desktop/runtime PNGs."""
+    if sys.platform != "win32":
+        return None
+    if not WINDOWS_ICON_SOURCE.is_file():
+        raise RuntimeError(f"Windows icon is unavailable: {WINDOWS_ICON_SOURCE}")
+    return str(WINDOWS_ICON_SOURCE)
 
 
 def verify_build_metadata() -> str:

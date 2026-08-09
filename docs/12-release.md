@@ -53,6 +53,24 @@ that metadata. If the version changed after environment installation, reinstall 
 
 The current version remains 0.1.0. There is no separate build identifier.
 
+## Release Identity and License
+
+The locked release identity is:
+
+```text
+Product: Hesiva
+Python/distribution package: hesiva
+Debian package: hesiva
+Maintainer: Kayra Terlemez <kayraterlemez2@gmail.com>
+License: MIT
+Master icon: assets/hesiva-icon.png
+```
+
+`LICENSE` contains the standard MIT text with `Copyright (c) 2026 Kayra Terlemez`.
+`pyproject.toml` identifies the same SPDX license and includes `LICENSE` in distribution metadata.
+About uses the concise **MIT Lisansı** label; it does not duplicate the legal text or add a
+publisher, support URL, or website.
+
 ## Linux Build
 
 Prerequisites:
@@ -166,26 +184,64 @@ No “all Linux distributions” claim is made.
 
 ## Desktop Integration and Debian Package
 
-No authoritative application icon exists in the repository. The frozen UI PDF is a visual reference,
-not a source icon asset, and is not extracted or regenerated for packaging. Desktop icon metadata is
-therefore intentionally not invented.
+`assets/hesiva-icon.png` is the immutable 2000×2000 RGBA master. Run:
 
-A Debian package is also deferred because Debian control metadata needs an authoritative Maintainer
-identity, while the repository does not define one. The repository's `LICENSE` is empty and the
-license decision remains unresolved. No license, maintainer, publisher, website, or copyright claim
-is inferred.
-
-Once those decisions exist, the intended layout is conventional and keeps mutable data outside the
-package:
-
-```text
-/opt/hesiva/             onedir runtime
-/usr/bin/hesiva          launcher or symlink
-/usr/share/applications/hesiva.desktop
-/usr/share/icons/...     authoritative Hesiva icon
+```bash
+scripts/generate_icons.sh
 ```
 
-Ordinary package removal must leave each user's XDG Hesiva directory untouched.
+to deterministically create 16, 32, 48, 64, 128, 256, and 512 pixel hicolor PNGs plus the
+multi-resolution Windows-preparation ICO in `packaging/icons/`. The PNG is bundled for the Qt
+application/window icon and installed separately in the freedesktop hicolor hierarchy. The Linux
+desktop entry is `packaging/linux/hesiva.desktop` and resolves `Exec=hesiva`, `Icon=hesiva`, and
+`Terminal=false` without a developer-specific path.
+
+The Debian build uses the existing PyInstaller `onedir` output and this conventional immutable
+layout:
+
+```text
+/opt/hesiva/             complete PyInstaller onedir runtime
+/usr/bin/hesiva          POSIX launcher to /opt/hesiva/Hesiva
+/usr/share/applications/hesiva.desktop
+/usr/share/icons/hicolor/<size>x<size>/apps/hesiva.png
+/usr/share/doc/hesiva/LICENSE
+```
+
+On an amd64 build host with `dpkg-deb`, run:
+
+```bash
+scripts/build_deb.sh
+```
+
+The script obtains the version through `hesiva.version.get_application_version()`, uses a private
+temporary package root, and writes `dist/hesiva_<version>_amd64.deb`. Current control metadata uses
+package `hesiva`, architecture `amd64`, section `utils`, priority `optional`, the locked maintainer,
+and only external `libc6`/`libgl1` runtime dependencies; the rest of the inspected Qt/XCB runtime is
+inside the PyInstaller tree. The helper never installs build tools or the package automatically.
+When `dpkg-deb` is unavailable, `scripts/build_deb.sh --stage-only /absolute/new/directory` may be
+used to inspect the exact package root without fabricating a `.deb`; the destination must not exist.
+
+Install and remove on a compatible test system with the normal Debian tools:
+
+```bash
+sudo apt install ./dist/hesiva_0.1.0_amd64.deb
+sudo apt remove hesiva
+```
+
+There are no package lifecycle scripts. Ordinary removal or purge removes package-managed runtime,
+launcher, desktop, icon, and license files only. It neither enumerates home directories nor removes
+`$XDG_DATA_HOME/hesiva` or `~/.local/share/hesiva`; reinstall and upgrade therefore preserve the
+user-owned database, configuration, and backups.
+
+This development host does not currently provide `dpkg-deb` or a disposable Debian install root.
+Consequently the build helper and package-root mappings are reviewable and tested, while actual
+`.deb` construction, `dpkg-deb --info`/`--contents`, and isolated install/remove/reinstall remain a
+release-environment gate. No system package is installed automatically to bypass that gate.
+
+Any `.deb` produced from the current openSUSE Tumbleweed/glibc 2.43 runtime is a
+development/validation package only. Wrapping the runtime in Debian metadata does not lower its
+glibc symbol requirements or establish universal Debian/Ubuntu compatibility. The final package
+must be rebuilt and tested on the selected older supported glibc baseline.
 
 ## Windows Build Foundation
 
@@ -207,6 +263,10 @@ Turkish text, PDF and native print dialog, backup/restore, synthetic legacy impo
 version, reopen, clean shutdown, and install/remove data preservation. Installer technology is a
 later Windows-specific decision; NSIS or Inno Setup is not selected here.
 
+`packaging/icons/hesiva.ico` prepares 16, 24, 32, 48, 64, 128, and 256 pixel frames and is selected
+by the Windows branch of `packaging/Hesiva.spec`. This is configuration preparation only, not a
+claim that the Windows executable icon has been validated.
+
 ## Release Gate
 
 Before any stable V1 claim:
@@ -217,9 +277,11 @@ Before any stable V1 claim:
 - no `ldd` dependency is unresolved in the final onedir tree
 - a compatible old-glibc build and representative-hardware check pass
 - native Windows build/smoke passes before Windows support is claimed
-- final icon, license, maintainer, and distribution metadata decisions are resolved
-- `.deb` install/remove and user-data preservation are tested if Debian packaging is selected
+- authoritative icon, MIT license, maintainer, and distribution metadata remain consistent
+- `.deb` is built and inspected with `dpkg-deb` on a compatible Debian-family build host
+- `.deb` install/remove/reinstall and user-data preservation are tested in a disposable environment
 - UI, printer, PDF, backup/restore, import, and recovery rehearsals pass on target systems
 
-Generated `build/`, `dist/`, `.deb`, and `.tar.gz` outputs remain untracked. V1 is not final until
-these remaining release decisions and target-environment checks are completed.
+Generated `build/`, `dist/`, `.deb`, and `.tar.gz` outputs remain untracked. Source desktop entries,
+packaging scripts, the master icon, generated release-resource icons, and their tests remain tracked.
+V1 is not final until the older-glibc build and target-environment checks are completed.

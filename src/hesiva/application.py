@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 from argon2 import PasswordHasher
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from hesiva.composition import ApplicationContext, build_application_context
@@ -12,6 +13,7 @@ from hesiva.database.paths import (
     get_production_database_path,
 )
 from hesiva.database.startup import DatabaseStartupError, prepare_database
+from hesiva.resources import get_application_icon_path
 from hesiva.services import AuthenticationError, AuthenticationState
 from hesiva.ui.auth_dialogs import (
     DatabaseChoiceDialog,
@@ -27,6 +29,20 @@ LOGGER = logging.getLogger(__name__)
 
 class ApplicationStartupError(Exception):
     """Raised when Hesiva cannot prepare its local application infrastructure."""
+
+
+def apply_application_icon(application: QApplication) -> bool:
+    """Apply the bundled Hesiva icon, or retain the platform fallback if unavailable."""
+    icon_path = get_application_icon_path()
+    if icon_path is None:
+        LOGGER.warning("The Hesiva application icon resource is unavailable")
+        return False
+    icon = QIcon(str(icon_path))
+    if icon.isNull():
+        LOGGER.warning("The Hesiva application icon resource could not be loaded")
+        return False
+    application.setWindowIcon(icon)
+    return True
 
 
 def create_application_context(
@@ -154,6 +170,7 @@ def _show_invalid_authentication_state() -> None:
 def main() -> int:
     """Start the Hesiva desktop application."""
     application = QApplication(sys.argv)
+    apply_application_icon(application)
     try:
         application_context = create_application_context()
     except ApplicationStartupError as error:

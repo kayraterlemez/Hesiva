@@ -767,7 +767,8 @@ Settings and About tests should additionally verify:
 - An unavailable configured destination does not block startup and does not silently fall back
 - Settings exposes no password hash, reset path, or fabricated preferences
 - About uses the authoritative `pyproject.toml` version in source-tree execution
-- About omits independent build, license, copyright, cloud, and encryption claims
+- About shows the authoritative MIT label and omits independent build, publisher, cloud, and
+  encryption claims
 - Settings, password change, and About appear once in the final menu flow
 
 Tests must never assert or log real user passwords.
@@ -1490,6 +1491,12 @@ repeat it on the selected older glibc baseline, the representative Intel i3-540/
 chosen Linux desktop/print environment. Windows requires a native Windows x86_64 build followed by
 the corresponding startup, path, authentication, CRUD, PDF/print, backup/restore, import, and
 uninstall-preservation checks.
+
+Release-resource tests also validate the master and generated icon dimensions/transparency,
+source/frozen icon resolution, desktop-entry semantics, Debian metadata/layout mappings, MIT
+metadata consistency, and the absence of user-data cleanup scripts or developer-specific paths.
+`desktop-file-validate` and `dpkg-deb` inspection remain build-host validation steps rather than unit
+tests of those system tools.
 
 ---
 

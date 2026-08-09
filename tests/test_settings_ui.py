@@ -288,10 +288,10 @@ def test_about_menu_uses_authoritative_version_without_unapproved_claims_or_writ
     assert "Hesiva" in captured_text
     assert f"Sürüm {get_application_version()}" in captured_text
     assert "Veteriner müşteri hesap ve bakiye takip uygulaması." in captured_text
+    assert "MIT Lisansı" in captured_text
     for excluded in (
         "Build 2026.08",
         "Tüm hakları saklıdır",
-        "MIT",
         "GPL",
         "bulut",
         "şifreleme",

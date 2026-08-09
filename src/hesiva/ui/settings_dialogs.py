@@ -146,6 +146,11 @@ class AboutDialog(QDialog):
         self.description_label.setWordWrap(True)
         self.description_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 
+        self.license_label = QLabel("MIT Lisansı", self)
+        self.license_label.setObjectName("aboutLicenseLabel")
+        self.license_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.license_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+
         self.close_button = QPushButton("Kapat", self)
         self.close_button.setObjectName("closeAboutButton")
         self.close_button.setDefault(True)
@@ -161,6 +166,7 @@ class AboutDialog(QDialog):
         layout.addWidget(self.version_label)
         layout.addSpacing(4)
         layout.addWidget(self.description_label)
+        layout.addWidget(self.license_label)
         layout.addSpacing(8)
         layout.addLayout(buttons)
 

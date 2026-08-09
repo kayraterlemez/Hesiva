@@ -1,0 +1,11 @@
+Package: hesiva
+Version: @VERSION@
+Architecture: amd64
+Maintainer: Kayra Terlemez <kayraterlemez2@gmail.com>
+Section: utils
+Priority: optional
+Depends: libc6, libgl1
+Installed-Size: @INSTALLED_SIZE@
+Description: Offline-first veteriner müşteri hesap ve bakiye takip uygulaması
+ Hesiva müşteri borç, ödeme, hayvan, hatırlatma ve raporlama
+ iş akışlarını yerel bir masaüstü uygulamasında yönetir.

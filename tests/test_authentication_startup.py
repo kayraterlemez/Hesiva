@@ -411,8 +411,16 @@ def test_main_closes_application_context_when_authentication_flow_is_cancelled(
 
     context = FakeContext()
     monkeypatch.setattr(application_module, "QApplication", FakeApplication)
+    monkeypatch.setattr(application_module, "apply_application_icon", lambda _application: True)
     monkeypatch.setattr(application_module, "create_application_context", lambda: context)
     monkeypatch.setattr(application_module, "run_startup_flow", lambda _context: None)
 
     assert application_module.main() == 0
     assert context.closed
+
+
+def test_application_icon_is_applied_before_normal_startup(application: QApplication) -> None:
+    application.setWindowIcon(application.windowIcon().__class__())
+
+    assert application_module.apply_application_icon(application)
+    assert not application.windowIcon().isNull()

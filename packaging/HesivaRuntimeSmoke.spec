@@ -9,6 +9,7 @@ from pyinstaller_support import (
     MIGRATION_HIDDEN_IMPORTS,
     REPOSITORY_ROOT,
     SOURCE_ROOT,
+    executable_icon,
     hesiva_datas,
     with_baseline_linux_libraries,
     without_unused_qt_plugins,
@@ -49,6 +50,7 @@ executable = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=executable_icon(),
 )
 
 collection = COLLECT(

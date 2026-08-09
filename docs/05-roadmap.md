@@ -302,13 +302,14 @@ Tasks:
 No new Version 1 features are introduced during this phase.
 
 Settings remains limited to password change, preferred manual-backup location, and application
-version. Release licensing/copyright metadata and any separate build identifier remain deferred to
-release preparation.
+version. MIT licensing and the individual copyright holder are now established for release
+preparation; a separate build identifier remains outside Version 1.
 
 The packaging foundation produces a locally exercised Linux `onedir` candidate at version 0.1.0.
-It does not promote the project to Version 1.0 or establish final release readiness. Desktop package
-metadata remains blocked until an authoritative icon, maintainer identity, and license decision are
-available.
+It does not promote the project to Version 1.0 or establish final release readiness. The
+authoritative icon, desktop metadata, Debian package name, maintainer, and license are now defined;
+the current host still requires Debian tooling and an older-glibc release build environment before
+the `.deb` can be treated as a validated release artifact.
 
 Expected result:
 
