@@ -18,11 +18,16 @@ from hesiva.services.exceptions import (
     CustomerNotFoundError,
     InvalidAnimalOwnershipError,
     InvalidStateTransitionError,
+    LegacyImportDestinationNotEmptyError,
+    LegacyImportError,
+    LegacyImportSourceError,
+    LegacyImportVerificationError,
     ReminderNotFoundError,
     ServiceError,
     TransactionNotFoundError,
     ValidationError,
 )
+from hesiva.services.legacy_import_service import LegacyImportService
 from hesiva.services.reminder_service import ReminderService
 from hesiva.services.report_service import ReportService
 from hesiva.services.transaction_service import TransactionService
@@ -42,6 +47,11 @@ __all__ = [
     "CustomerSummaryService",
     "InvalidAnimalOwnershipError",
     "InvalidStateTransitionError",
+    "LegacyImportDestinationNotEmptyError",
+    "LegacyImportError",
+    "LegacyImportService",
+    "LegacyImportSourceError",
+    "LegacyImportVerificationError",
     "ReminderNotFoundError",
     "ReminderService",
     "ReportService",

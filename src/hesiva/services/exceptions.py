@@ -28,3 +28,19 @@ class InvalidAnimalOwnershipError(ServiceError):
 
 class InvalidStateTransitionError(ServiceError):
     """Raised when a lifecycle transition conflicts with existing state."""
+
+
+class LegacyImportError(ServiceError):
+    """Raised when a legacy import cannot be completed safely."""
+
+
+class LegacyImportSourceError(LegacyImportError):
+    """Raised when a legacy source does not match the supported V1 contract."""
+
+
+class LegacyImportDestinationNotEmptyError(LegacyImportError):
+    """Raised when a legacy import targets a non-empty business database."""
+
+
+class LegacyImportVerificationError(LegacyImportError):
+    """Raised when destination reconciliation fails before commit."""

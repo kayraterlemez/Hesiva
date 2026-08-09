@@ -788,16 +788,29 @@ Legacy import is one of the highest-risk components.
 
 It should receive extensive automated testing.
 
-A synthetic Veresiye 5 style database should be created for tests.
+A synthetic Veresiye 5 source should be created for tests. It must reproduce only the supported
+framed EXA structure and exact required EDB schema, use invented data, and exercise the complete
+`.exa` → temporary `Frm1.edb` → read-only source → atomic Hesiva import path. Real customer backups
+must never be committed as fixtures.
 
-The test database may contain simplified versions of legacy tables such as:
+The source database contains exact supported-profile versions of:
 
 ```text
 CariKart
 Data
+ATemp
 ```
 
 Import tests should never require the real business database.
+
+Parser tests cover malformed/truncated framing, invalid `FILE:LIST`, missing/duplicate
+`Frm1.edb`, bad `XEC2` markers and flags, corrupt or incomplete zlib records, size mismatches, and
+trailing bytes. Source hashes and absence of SQLite sidecars verify read-only behavior.
+
+Synthetic source text includes all Turkish Windows-1254 letters. Tests require strict CP1254
+decoding, normal destination Unicode round-trip, and rejection rather than replacement of
+undecodable bytes. Dates use exact `YYYY-MM-DD`, nonblank times use exact `HH:MM:SS`, and money tests
+cover NULL, INTEGER, REAL, one/two-decimal values, and rejected ambiguous precision/types.
 
 ---
 
@@ -907,6 +920,8 @@ Import warning
 
 The transaction history remains authoritative in the new application.
 
+Tests also prove that legacy `STarih` does not determine Son İşlem.
+
 ---
 
 # Import Rollback
@@ -930,6 +945,9 @@ No partial import remains
 ```
 
 The database should return to the state it had before the failed import operation.
+
+Separate tests force failure after customer flush, during transaction insertion, and during final
+verification. Each case must leave no customer, transaction, or preserved legacy ID behind.
 
 ---
 
@@ -968,6 +986,14 @@ Synthetic legacy fixtures should include problematic cases such as:
 - Unexpected NULL
 - Unsupported table structure
 
+They also cover the two defined non-blocking translations:
+
+- A structurally empty, unreferenced nameless customer is skipped and counted.
+- A row whose normalized `Borc` and `Alacak` are both zero is skipped and counted.
+
+A nameless customer with meaningful data or linked transactions remains blocking. Zero rows must
+not create fake one-kuruş transactions or other domain records.
+
 The importer should produce controlled errors or warnings.
 
 It must not crash unpredictably or silently discard important records.
@@ -989,6 +1015,10 @@ Calculated balances
 ```
 
 should be compared where the legacy source contains sufficient information.
+
+Counts distinguish source rows, defined skipped rows, and eligible/imported rows. Debt, payment,
+and signed net reconcile globally and for every imported customer before commit; stored customer
+summaries are reported separately as reconciliation-only values.
 
 This is one of the most important safeguards in the migration process.
 

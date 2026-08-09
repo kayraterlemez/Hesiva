@@ -419,6 +419,11 @@ Priority: Critical
 
 The legacy source shall always be opened read-only and shall never be modified by the importer.
 
+Version 1 supports the validated Veresiye 5 framed `.exa` profile containing exactly one
+`Frm1.edb`, plus direct `.edb` selection as an advanced path. Unknown container flags, framing,
+schema shapes, dates, times, encodings, and monetary representations shall be rejected rather than
+guessed. Legacy text in this profile is decoded strictly as Windows-1254/CP1254.
+
 Priority: Critical
 
 ---
@@ -426,6 +431,10 @@ Priority: Critical
 ### REQ-039
 
 Version 1 legacy migration shall preserve historical customers and financial movements, including original business dates, descriptions, amounts, and customer relationships whenever valid source data is available.
+
+Two explicitly classified non-business source rows are excluded and counted: structurally empty,
+unreferenced placeholder customer cards and zero-movement `Data` rows. The importer shall not
+create fake customer names or fake nonzero transactions for either category.
 
 Priority: Critical
 
@@ -462,6 +471,10 @@ Priority: High
 ### REQ-043
 
 A critical import failure shall roll back the migration so that no partial production import remains.
+
+The destination write shall use one transaction and shall be committed only after customer and
+transaction counts, legacy-ID mappings, foreign keys, global debt/payment/net totals, and
+per-customer debt/payment/net totals reconcile.
 
 Priority: Critical
 

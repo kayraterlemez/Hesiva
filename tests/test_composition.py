@@ -45,6 +45,8 @@ def test_service_sets_use_short_lived_sessions_and_persist_successful_writes(
         assert [summary.customer_id for summary in summaries] == [customer_id]
         assert detail.customer_id == customer_id
         assert detail.full_name == "Composed Customer"
+        assert first_services.legacy_import._session is first_session
+        assert first_services.legacy_import._repository._session is first_session
 
     assert object_session(customer) is None
 

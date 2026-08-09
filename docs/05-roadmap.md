@@ -247,18 +247,20 @@ Migrate the existing Veresiye 5 history.
 
 Tasks:
 
-- Validate `.exa` source
+- Parse and strictly validate the supported framed Veresiye 5 `.exa` profile
 - Support validated legacy `.edb` SQLite sources
-- Extract/read legacy database files read-only
+- Recover only `Frm1.edb` into a private temporary directory and read it strictly read-only
+- Decode the discovered legacy text profile as Windows-1254/CP1254
 - Read `CariKart` customers
 - Read `Data` financial movements
+- Count and skip only defined empty customer placeholders and zero-movement `Data` rows
 - Preserve useful `legacy_id` references
 - Map legacy debt/credit to signed integer-kuruş transactions
 - Preserve dates, descriptions, customer relationships, and available times
 - Recalculate balances
-- Reconcile customer counts, movement counts, debt totals, payment totals, and sample balances
+- Reconcile eligible counts and global/per-customer debt, payment, and net totals
 - Generate import report
-- Roll back on critical failure
+- Write and verify the destination in one transaction; roll back on critical failure
 - Prevent accidental import into a non-empty Version 1 business database
 - Perform migration rehearsal before production migration
 

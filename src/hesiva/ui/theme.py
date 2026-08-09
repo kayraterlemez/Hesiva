@@ -163,6 +163,14 @@ QLabel[successMessage="true"] {
     font-weight: 600;
 }
 
+QLabel[infoBanner="true"] {
+    color: #224e79;
+    background: #edf5fc;
+    border: 1px solid #bfd6ea;
+    border-radius: 3px;
+    padding: 8px;
+}
+
 QLabel[dialogHeading="true"] {
     color: #172534;
     font-size: 18px;

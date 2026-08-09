@@ -11,6 +11,7 @@ from hesiva.database.session import create_session_factory
 from hesiva.repositories import (
     AnimalRepository,
     CustomerRepository,
+    LegacyImportRepository,
     ReminderRepository,
     ReportRepository,
     TransactionRepository,
@@ -23,6 +24,7 @@ from hesiva.services import (
     CustomerDetailService,
     CustomerService,
     CustomerSummaryService,
+    LegacyImportService,
     ReminderService,
     ReportService,
     RestoreResult,
@@ -42,6 +44,7 @@ class ServiceSet:
     transaction: TransactionService
     reminder: ReminderService
     report: ReportService
+    legacy_import: LegacyImportService
 
 
 @dataclass
@@ -71,6 +74,7 @@ class ApplicationContext:
                 transaction_repository = TransactionRepository(session)
                 reminder_repository = ReminderRepository(session)
                 report_repository = ReportRepository(session)
+                legacy_import_repository = LegacyImportRepository(session)
 
                 yield ServiceSet(
                     account_history=AccountHistoryService(transaction_repository),
@@ -86,6 +90,7 @@ class ApplicationContext:
                     ),
                     reminder=ReminderService(session, reminder_repository, customer_repository),
                     report=ReportService(report_repository),
+                    legacy_import=LegacyImportService(session, legacy_import_repository),
                 )
         finally:
             self._active_service_scopes -= 1

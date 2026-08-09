@@ -41,6 +41,7 @@ from hesiva.read_models import (
     CustomerDetail,
     CustomerSummary,
     CustomerSummarySort,
+    LegacyImportResult,
     ReminderSummary,
 )
 from hesiva.services import (
@@ -66,6 +67,7 @@ from hesiva.ui.financial_dialogs import (
     PaymentDialog,
     VoidTransactionDialog,
 )
+from hesiva.ui.legacy_import_dialog import LegacyImportDialog
 from hesiva.ui.presentation import (
     ReminderPresentationState,
     classify_reminder,
@@ -209,6 +211,9 @@ class MainWindow(QMainWindow):
         self.backup_action = QAction("Yedekleme ve Veri Güvenliği", self)
         self.backup_action.triggered.connect(self._open_backup_dialog)
         file_menu.addAction(self.backup_action)
+        self.legacy_import_action = QAction("Eski Verileri İçe Aktar...", self)
+        self.legacy_import_action.triggered.connect(self._open_legacy_import_dialog)
+        file_menu.addAction(self.legacy_import_action)
         file_menu.addSeparator()
         exit_action = QAction("Çıkış", self)
         exit_action.triggered.connect(self.close)
@@ -1906,6 +1911,17 @@ class MainWindow(QMainWindow):
     def _show_financial_operation_error(self, message: str) -> None:
         QMessageBox.warning(self, "İşlem Tamamlanamadı", message)
 
+    def _open_legacy_import_dialog(self) -> None:
+        dialog = LegacyImportDialog(self._application_context, self)
+        dialog.import_completed.connect(self._refresh_after_legacy_import)
+        dialog.exec()
+        dialog.import_completed.disconnect(self._refresh_after_legacy_import)
+        dialog.deleteLater()
+
+    def _refresh_after_legacy_import(self, _result: LegacyImportResult) -> None:
+        self._reload_business_state()
+        self.statusBar().showMessage("Eski Veresiye 5 verileri başarıyla içe aktarıldı.", 8000)
+
     def _open_backup_dialog(self) -> None:
         try:
             backup_directory = self._application_context.prepare_default_backup_directory()
@@ -2011,7 +2027,7 @@ class MainWindow(QMainWindow):
                 )
             else:
                 dialog.accept()
-                self._reset_after_successful_restore()
+                self._reload_business_state()
                 QMessageBox.information(
                     self,
                     "Geri Yükleme Tamamlandı",
@@ -2029,8 +2045,8 @@ class MainWindow(QMainWindow):
         dialog.restore_requested.disconnect(restore_backup)
         dialog.deleteLater()
 
-    def _reset_after_successful_restore(self) -> None:
-        """Discard every database-derived UI value and reload from the rebound context."""
+    def _reload_business_state(self) -> None:
+        """Discard database-derived UI values and reload them from the application context."""
         self._search_timer.stop()
         search_blocker = QSignalBlocker(self.customer_search_input)
         sort_blocker = QSignalBlocker(self.customer_sort_combo)

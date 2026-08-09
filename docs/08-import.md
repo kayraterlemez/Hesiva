@@ -21,6 +21,7 @@ Primary user-facing source:
 Validated internal/source database format:
 
 - SQLite database stored with an `.edb` extension
+- Direct `.edb` selection is an advanced workflow
 
 Version 1 is not a general CSV/Excel importer.
 
@@ -30,7 +31,20 @@ Additional import formats may be considered later.
 
 # Known Legacy Structure
 
-Observed Veresiye 5 data is stored in SQLite databases despite the `.edb` extension.
+The supported `.exa` source is a custom Veresiye 5 framed container, not a renamed ZIP, 7z, RAR,
+gzip, tar, OLE document, or SQLite file. It contains zlib-compressed records, a compressed
+`FILE:LIST`, `XEC2` record markers, little-endian length fields, Windows-1254 member paths, and an
+eight-byte terminal footer. Hesiva parses this structure deterministically and must consume the
+complete container. It does not scan arbitrary bytes for SQLite magic.
+
+The parser rejects malformed/truncated framing, corrupt or unconsumed zlib streams, inconsistent
+declared lengths, unknown nonzero flags, unexpected markers, decompressed-size mismatches,
+trailing bytes, a missing `Frm1.edb`, or multiple members whose basename is `Frm1.edb`. Chunk count
+and recovered database size are source-declared values and are not hard-coded from one backup.
+
+Recovered `Frm1.edb` is SQLite 3. It is created with private permissions inside a private temporary
+directory, validated for SQLite magic, opened with SQLite URI `mode=ro&immutable=1`, and placed in
+`query_only` mode. It is never passed through Hesiva startup, Alembic, or migration code.
 
 Known tables include:
 
@@ -40,11 +54,21 @@ Data
 ATemp
 ```
 
-Additional legacy database files may include tables such as:
+The supported V1 schema profile requires these exact columns and declared types:
 
 ```text
-Firma
-Setting
+CariKart:
+ID integer primary key, Tarih date, Kod char(25), Unvan char(100), Yetkili char(100),
+Gsm char(25), Tel char(25), Fax char(25), Adres char(250), il char(50), ilce char(50),
+VergiDaire char(25), VergiNo char(25), EPosta char(100), Web char(100), CLimit Money,
+Hesap char(5), CNot text, STarih date, Borc Money, Alacak Money, Bakiye Money
+
+Data:
+ID integer primary key, Tarih date, Saat time, Tur char(25), Unvan char(100),
+Aciklama char(250), Borc Money, Alacak Money, CariKartID integer
+
+ATemp:
+ID integer primary key, TurID integer, Aciklama char(250)
 ```
 
 For Hesiva migration, the important Version 1 business tables are:
@@ -54,7 +78,8 @@ CariKart → customers
 Data     → financial movements
 ```
 
-`ATemp` and legacy application/configuration tables are not required for the core financial migration.
+`ATemp` is required for supported-profile schema recognition but is non-authoritative autocomplete
+or description-cache data and is never imported.
 
 The importer must validate actual table/column structure instead of trusting the filename extension alone.
 
@@ -71,6 +96,7 @@ The importer shall:
 - Never rename or replace the original source
 - Extract archive contents only into controlled temporary locations
 - Remove temporary extracted copies when they are no longer required
+- Decode legacy source text explicitly without changing Hesiva's normal Unicode storage
 
 The original legacy backup remains available for independent recovery/comparison.
 
@@ -96,28 +122,18 @@ This keeps migration deterministic and easier to verify.
 
 # Import Wizard
 
-Recommended workflow:
+The frozen five-stage workflow is:
 
 ```text
-Select Veresiye 5 backup
+Kaynak
         ↓
-Analyze source
+Analiz
         ↓
-Show source summary
+Onay
         ↓
-Validate destination is suitable
+Aktarım
         ↓
-Confirm migration
-        ↓
-Import customers
-        ↓
-Import financial movements
-        ↓
-Reconcile totals
-        ↓
-Show import report
-        ↓
-Finish
+Sonuç
 ```
 
 The user should see clear progress for operations that take noticeable time.
@@ -135,6 +151,11 @@ Before migration begins, the importer verifies:
 - Required tables exist
 - Required columns exist
 - Database is structurally readable
+- SQLite integrity check succeeds
+- Legacy text decodes strictly as Windows-1254/CP1254
+- Required dates and optional times use the supported exact formats
+- Monetary values have supported runtime types and precision
+- Legacy IDs and customer references are structurally valid
 - Destination database is suitable for Version 1 migration
 
 If the source structure is unsupported, import stops before writing current business data.
@@ -163,21 +184,26 @@ Alacak
 Bakiye
 ```
 
-Version 1 mapping should preserve useful business information without reproducing obsolete accounting fields.
-
-Recommended mapping:
+Version 1 uses this authoritative mapping:
 
 | Veresiye 5 | Hesiva |
 | --- | --- |
 | `ID` | `Customer.legacy_id` |
 | `Unvan` | `Customer.full_name` |
-| `Gsm` | Preferred phone when present |
-| `Tel` | Phone fallback when `Gsm` is empty |
-| `Adres`, `İlçe`, `İl` | Combined/preserved customer address |
+| trimmed `Gsm` | Preferred phone when nonblank |
+| trimmed `Tel` | Phone fallback when `Gsm` is blank/NULL |
+| trimmed nonblank `Adres`, `ilce`, `il` | Joined in that order with `, ` |
 | `CNot` | `Customer.notes` |
-| `Tarih` | `Customer.registered_on` when valid |
+| `Tarih` (`YYYY-MM-DD`) | `Customer.registered_on`; NULL/blank becomes `None` |
 
-Other identity fields may be preserved only if a concrete Version 1 requirement exists.
+Unsupported identity fields are not squeezed into notes or other current fields.
+
+## Empty placeholder customer
+
+A nameless `CariKart` row is skipped only when it has no linked `Data` rows, all supported customer
+text is blank/NULL, and its relevant stored financial summaries are NULL or zero. It is counted as
+`skipped_placeholder_customers`. A nameless row with meaningful data or a linked row blocks the
+import. Hesiva never generates an “unknown” or “unnamed” customer.
 
 Legacy summary fields:
 
@@ -210,19 +236,32 @@ Alacak
 CariKartID
 ```
 
-Recommended mapping:
+Version 1 uses this authoritative mapping for each eligible financial row:
 
 | Veresiye 5 | Hesiva |
 | --- | --- |
 | `ID` | `Transaction.legacy_id` |
 | `CariKartID` | Current `customer_id` through legacy-ID mapping |
-| `Tarih` | `Transaction.transaction_date` |
-| `Saat` | `Transaction.transaction_time` when valid |
-| `Aciklama` | `Transaction.description` |
+| `Tarih` (`YYYY-MM-DD`) | `Transaction.transaction_date` |
+| `Saat` (`HH:MM:SS`) | `Transaction.transaction_time`; NULL/blank becomes `None` |
+| trimmed `Aciklama`, then `Tur`, then `Unvan` | First nonblank value becomes `Transaction.description` |
 | `Borc` | Positive `amount_kurus` |
 | `Alacak` | Negative `amount_kurus` |
 
-`Tur` and legacy `Unvan` may be used as validation/reference fields but are not required as current authoritative fields.
+If all three description candidates are blank, import is blocked. Imported financial rows have
+`animal_id = None` and `note = None`; unsupported source fields are not repurposed.
+
+# Legacy Text and Date/Time Contract
+
+Although the source SQLite header declares UTF-8, the supported Veresiye 5 profile stores legacy
+text cells as Windows-1254/CP1254 bytes. The source reader obtains bytes and decodes every relevant
+text value explicitly and strictly. Undecodable data blocks import; replacement characters,
+`errors="ignore"`, and locale-dependent conversion are forbidden. Destination strings are normal
+Python Unicode stored by Hesiva as UTF-8.
+
+`CariKart.Tarih` and `Data.Tarih` accept only `YYYY-MM-DD`; `Data.Tarih` is required for eligible
+financial rows. Nonblank `Data.Saat` accepts only valid `HH:MM:SS`. No missing date/time is replaced
+with today, midnight, or the current time.
 
 ---
 
@@ -239,14 +278,21 @@ Legacy debt:   1500.50 TL → +150050 kuruş
 Legacy credit:  300.00 TL →  -30000 kuruş
 ```
 
+The supported source runtime types for `Borc` and `Alacak` are SQLite INTEGER, REAL, and NULL. NULL
+on the unused side is interpreted as zero for classification. Conversion uses a stable decimal
+representation and `Decimal`, requires no more than two meaningful decimal places, and produces
+integer kuruş without floating-point accumulation or rounding.
+
 Rules:
 
-- `Borc > 0` and `Alacak == 0` → positive movement
-- `Alacak > 0` and `Borc == 0` → negative movement
-- Both zero → invalid/non-financial row requiring review
+- `Borc > 0` and normalized `Alacak == 0` → positive movement
+- `Alacak > 0` and normalized `Borc == 0` → negative movement
+- Both normalized sides zero → defined non-financial row; skip and count as `skipped_zero_movement_transactions`
 - Both non-zero → ambiguous row requiring review
+- Either side negative, nonnumeric, nonfinite, or more precise than two decimals → blocking anomaly
 
-Unexpected rows must never be silently converted using a guessed rule.
+Zero rows never become fake one-kuruş transactions, reminders, animals, or notes. Unexpected rows
+must never be silently converted using a guessed rule.
 
 ---
 
@@ -309,7 +355,8 @@ Legacy IDs are reference metadata only.
 
 `Customer.registered_on` preserves the legacy customer business/registration date when available. It must not be replaced by the Hesiva `created_at` timestamp.
 
-`Transaction.transaction_time` preserves the legacy `Data.Saat` value when valid. The field remains nullable because time data may be absent or invalid in legacy records.
+`Transaction.transaction_time` preserves a valid legacy `Data.Saat` value. The field remains
+nullable because time may be NULL/blank; an invalid nonblank time blocks import.
 
 Animal records are a Hesiva Version 1 feature and have no known direct Veresiye 5 source table, so Version 1 does not require `Animal.legacy_id`.
 
@@ -317,7 +364,8 @@ Animal records are a Hesiva Version 1 feature and have no known direct Veresiye 
 
 # Financial History Preservation
 
-Every valid historical financial movement should be imported.
+Every eligible nonzero historical financial movement is imported. Defined zero-movement/non-financial
+rows are counted in reconciliation but do not become Hesiva transactions.
 
 Descriptions and business dates should remain unchanged except for required encoding/normalization that does not alter meaning.
 
@@ -346,6 +394,11 @@ Legacy `Borc`, `Alacak`, and `Bakiye` summary fields may then be compared with t
 
 The new transaction history remains authoritative.
 
+Stored `CariKart.Borc`, `CariKart.Alacak`, and `CariKart.Bakiye` are reconciliation-only. A mismatch
+is reported as a warning and does not replace transaction-derived truth. `CariKart.STarih` is not
+authoritative and is never mapped to **Son İşlem**; Hesiva derives Son İşlem from imported financial
+transactions.
+
 ---
 
 # Reconciliation
@@ -354,13 +407,12 @@ Migration must verify aggregate and relationship integrity.
 
 At minimum, compare where source data permits:
 
-- Number of customers
-- Number of financial movements
-- Total legacy debt
-- Total legacy payments/credit
-- New total positive movements
-- New total negative movements
-- Per-customer calculated balances for representative/all feasible customers
+- Total `CariKart` rows, skipped placeholders, and eligible/imported customers
+- Total `Data` rows, skipped zero movements, and eligible/imported transactions
+- Eligible source debt/payment/net against destination positive/negative/signed totals
+- Per-customer eligible debt/payment/net for every imported customer
+- Preserved distinct/non-NULL customer and transaction legacy IDs
+- Destination zero-transaction and foreign-key checks
 - Broken `CariKartID` references
 - Invalid dates
 - Invalid monetary rows
@@ -375,7 +427,7 @@ Warnings must never be silently hidden.
 
 # Import Transaction and Rollback
 
-The current-database write portion of migration should be atomic whenever practical.
+The destination write is one caller-owned transaction.
 
 Conceptually:
 
@@ -401,7 +453,9 @@ Rollback
 
 No partial production migration remains.
 
-Long operations may use chunked implementation internally only if the same all-or-nothing safety can still be guaranteed or if a staging database is used and atomically promoted after validation.
+Transactions may be flushed in bounded batches, but no batch commits independently. Verification
+runs before the one final commit. Customer insertion, transaction insertion, or verification
+failure rolls back every imported row.
 
 ---
 
@@ -433,9 +487,8 @@ Technical logs may contain:
 
 - Migration stage
 - Counts
-- Legacy numeric IDs
 - Structural warnings
-- Exceptions
+- Exception categories without source row values
 
 Logs should avoid copying customer names, phone numbers, addresses, notes, or full financial histories unless absolutely necessary for a temporary controlled diagnostic.
 
@@ -476,14 +529,16 @@ The importer must not guess when source data is ambiguous.
 
 Examples requiring warning or failure include:
 
-- Missing customer name
+- Nameless customer that is not a defined empty placeholder
 - Broken `CariKartID`
 - Invalid date
 - Invalid amount
 - Both `Borc` and `Alacak` non-zero
-- Zero-value financial row
 - Missing required legacy table
 - Unexpected schema version/shape
+
+Defined empty customer placeholders and zero-movement rows are not anomalies: they are skipped and
+counted under their explicit categories.
 
 The final migration policy for each encountered real-world anomaly should be documented after inspecting representative legacy data.
 
@@ -517,5 +572,6 @@ These features should not complicate the one-time Veresiye 5 migration.
 8. Roll back critical failures.
 9. Do not silently guess ambiguous legacy data.
 10. Keep Version 1 migration deterministic by using an empty destination database.
+11. Never invent a customer name or nonzero financial movement.
 
 Migration is successful only when the new data can be reconciled against the legacy history closely enough to justify replacing the old application.

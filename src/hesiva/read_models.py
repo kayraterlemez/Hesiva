@@ -164,3 +164,44 @@ class YearlySummary:
     payment_kurus: int
     net_kurus: int
     months: tuple[YearlyMonthSummary, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class LegacyImportPreflight:
+    """Privacy-safe aggregate analysis of one supported Veresiye 5 source."""
+
+    source_sha256: str
+    source_customer_count: int
+    skipped_placeholder_customers: int
+    eligible_customer_count: int
+    source_data_count: int
+    skipped_zero_movement_transactions: int
+    eligible_transaction_count: int
+    total_debt_kurus: int
+    total_payment_kurus: int
+    signed_net_kurus: int
+    earliest_transaction_date: date | None
+    latest_transaction_date: date | None
+    stored_summary_compared_customers: int
+    stored_summary_matching_customers: int
+    stored_summary_mismatching_customers: int
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class LegacyImportResult:
+    """Privacy-safe verified result of one atomic Veresiye 5 import."""
+
+    source_customer_count: int
+    skipped_placeholder_customers: int
+    imported_customer_count: int
+    source_data_count: int
+    skipped_zero_movement_transactions: int
+    imported_transaction_count: int
+    total_debt_kurus: int
+    total_payment_kurus: int
+    signed_net_kurus: int
+    stored_summary_compared_customers: int
+    stored_summary_matching_customers: int
+    stored_summary_mismatching_customers: int
+    warnings: tuple[str, ...]
