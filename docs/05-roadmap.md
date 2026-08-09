@@ -289,11 +289,17 @@ Tasks:
 - Verify backup/restore
 - Verify migration
 - Verify reports
+- Verify the minimal Settings and About flows
+- Verify the preferred manual-backup destination and authoritative version display
 - Review logs for sensitive data
 - Remove unused/debug code
 - Update documentation
 
 No new Version 1 features are introduced during this phase.
+
+Settings remains limited to password change, preferred manual-backup location, and application
+version. Release licensing/copyright metadata and any separate build identifier remain deferred to
+release preparation.
 
 Expected result:
 

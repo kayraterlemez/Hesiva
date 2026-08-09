@@ -32,6 +32,7 @@ from hesiva.services import (
     ReminderService,
     ReportService,
     RestoreResult,
+    SettingsService,
     TransactionService,
 )
 
@@ -63,9 +64,14 @@ class ApplicationContext:
     _active_service_scopes: int = field(default=0, init=False, repr=False)
     _database_available: bool = field(default=True, init=False, repr=False)
     _backup_service: BackupService = field(init=False, repr=False)
+    settings: SettingsService = field(init=False)
 
     def __post_init__(self) -> None:
         self._backup_service = BackupService(self.database_path, self.configuration_store)
+        self.settings = SettingsService(
+            self.configuration_store,
+            self._backup_service.default_backup_directory,
+        )
 
     @contextmanager
     def services(self) -> Iterator[ServiceSet]:
@@ -113,6 +119,13 @@ class ApplicationContext:
     def prepare_default_backup_directory(self) -> Path:
         """Return the ready documented local fallback backup directory."""
         return self._backup_service.prepare_default_backup_directory()
+
+    def prepare_manual_backup_directory(self) -> Path:
+        """Resolve the configured manual-backup directory without silent fallback."""
+        destination, uses_default = self.settings.resolve_backup_destination_directory()
+        if uses_default:
+            return self._backup_service.prepare_default_backup_directory()
+        return destination
 
     def validate_backup(self, backup_path: Path) -> BackupMetadata:
         """Validate a backup without changing the application database."""

@@ -30,6 +30,10 @@ class CredentialPersistenceError(AuthenticationError):
     """Raised when credential configuration cannot be published durably."""
 
 
+class SettingsPersistenceError(ServiceError):
+    """Raised when application settings cannot be read or published safely."""
+
+
 class CustomerNotFoundError(ServiceError):
     """Raised when a requested customer does not exist."""
 

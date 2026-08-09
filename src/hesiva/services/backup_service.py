@@ -9,7 +9,6 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +20,7 @@ from hesiva.configuration import (
 )
 from hesiva.database.durability import sync_file, sync_parent_directory
 from hesiva.database.startup import DatabaseState, inspect_database
+from hesiva.version import get_application_version
 
 BACKUP_FORMAT_VERSION = 1
 BACKUP_EXTENSION = ".zip"
@@ -93,11 +93,16 @@ class BackupService:
 
     def prepare_default_backup_directory(self) -> Path:
         """Create the documented local fallback directory with private permissions."""
-        backup_directory = self.live_database_path.parent / "backups"
+        backup_directory = self.default_backup_directory
         backup_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         if os.name == "posix":
             backup_directory.chmod(0o700)
         return backup_directory
+
+    @property
+    def default_backup_directory(self) -> Path:
+        """Return the established local fallback without creating it."""
+        return self.live_database_path.parent / "backups"
 
     def create_backup(self, destination_path: Path) -> BackupMetadata:
         """Create and atomically publish a verified ZIP backup archive."""
@@ -563,7 +568,4 @@ class BackupService:
 
     @staticmethod
     def _application_version() -> str:
-        try:
-            return version("hesiva")
-        except PackageNotFoundError:
-            return "0.1.0"
+        return get_application_version()

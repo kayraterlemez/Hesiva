@@ -418,7 +418,24 @@ The application shall allow the user to choose a backup destination and should r
 
 A same-device backup may be used as a fallback but shall not be presented as protection against disk failure.
 
+The preferred manual-backup directory is stored as the optional
+`backup.destination_directory` configuration value. Missing or `null` uses Hesiva's established
+local backup directory. Changing the preference takes effect immediately for future manual backups,
+does not move or create a backup, and requires no restart. If a configured directory is unavailable,
+manual backup shall fail clearly without silently falling back; startup, authentication, and normal
+business-data access remain available.
+
 Priority: High
+
+---
+
+### V1 Settings and About Contract
+
+Version 1 Settings contains only password change, preferred manual-backup location, and the current
+application version. About displays **Hesiva**, the version obtained from `pyproject.toml`
+`project.version`, and **Veteriner müşteri hesap ve bakiye takip uygulaması.** Version 1 has no
+separate build identifier. License and copyright presentation is deferred until release licensing
+is decided.
 
 ---
 

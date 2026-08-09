@@ -752,12 +752,23 @@ Authentication tests should verify:
 - Changed password behavior if supported
 - Empty password behavior according to requirements
 - Exact `config.json` structure, malformed-state rejection, and unknown-field preservation
+- Missing/null/configured backup-destination resolution and cross-platform absolute-path validation
 - Locked production Argon2id parameters with a lower-cost injected test hasher where appropriate
 - Fresh, incomplete, complete, and blocked startup state transitions
 - No Main Window construction before successful authentication
 - Import-success/final-config-write recovery without duplicate import
 - Atomic credential publication and old-password preservation on failed password change
 - Real configuration in backups and pairwise database/configuration restore and rollback
+
+Settings and About tests should additionally verify:
+
+- Backup-location updates preserve all authentication fields and take effect without restart
+- Selecting a location neither creates a backup nor moves existing backups
+- An unavailable configured destination does not block startup and does not silently fall back
+- Settings exposes no password hash, reset path, or fabricated preferences
+- About uses the authoritative `pyproject.toml` version in source-tree execution
+- About omits independent build, license, copyright, cloud, and encryption claims
+- Settings, password change, and About appear once in the final menu flow
 
 Tests must never assert or log real user passwords.
 

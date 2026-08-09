@@ -3,7 +3,7 @@ import json
 import os
 import tempfile
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from argon2 import extract_parameters
@@ -13,6 +13,7 @@ from argon2.low_level import Type
 from hesiva.database.durability import sync_parent_directory
 
 CONFIG_FORMAT_VERSION = 1
+_MISSING = object()
 
 
 class ConfigurationError(Exception):
@@ -70,6 +71,23 @@ class ApplicationConfiguration:
             raise InvalidConfigurationError("The stored password hash is not Argon2id.")
         if type(authentication.get("setup_complete")) is not bool:
             raise InvalidConfigurationError("The setup completion state is invalid.")
+        backup = payload.get("backup", _MISSING)
+        if backup is not _MISSING:
+            if not isinstance(backup, dict):
+                raise InvalidConfigurationError("The backup configuration is invalid.")
+            if "destination_directory" not in backup:
+                raise InvalidConfigurationError("The backup destination configuration is invalid.")
+            destination_directory = backup["destination_directory"]
+            if destination_directory is not None:
+                if (
+                    not isinstance(destination_directory, str)
+                    or not destination_directory.strip()
+                    or "\0" in destination_directory
+                    or not _is_absolute_path_on_supported_platform(destination_directory)
+                ):
+                    raise InvalidConfigurationError(
+                        "The backup destination configuration is invalid."
+                    )
         return cls(copy.deepcopy(payload))
 
     @classmethod
@@ -81,6 +99,7 @@ class ApplicationConfiguration:
                     "password_hash": password_hash,
                     "setup_complete": setup_complete,
                 },
+                "backup": {"destination_directory": None},
             }
         )
 
@@ -91,6 +110,13 @@ class ApplicationConfiguration:
     @property
     def setup_complete(self) -> bool:
         return self._payload["authentication"]["setup_complete"]
+
+    @property
+    def backup_destination_directory(self) -> str | None:
+        backup = self._payload.get("backup")
+        if backup is None:
+            return None
+        return backup["destination_directory"]
 
     def with_authentication(
         self,
@@ -106,6 +132,17 @@ class ApplicationConfiguration:
             authentication["setup_complete"] = setup_complete
         return self.from_payload(payload)
 
+    def with_backup_destination_directory(
+        self,
+        destination_directory: str | Path | None,
+    ) -> "ApplicationConfiguration":
+        payload = copy.deepcopy(self._payload)
+        backup = payload.setdefault("backup", {})
+        backup["destination_directory"] = (
+            None if destination_directory is None else str(destination_directory)
+        )
+        return self.from_payload(payload)
+
     def to_payload(self) -> dict[str, Any]:
         return copy.deepcopy(self._payload)
 
@@ -113,6 +150,11 @@ class ApplicationConfiguration:
         return (
             json.dumps(self._payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
         ).encode("utf-8")
+
+
+def _is_absolute_path_on_supported_platform(value: str) -> bool:
+    """Accept absolute POSIX or Windows paths without checking current availability."""
+    return PurePosixPath(value).is_absolute() or PureWindowsPath(value).is_absolute()
 
 
 class ConfigurationStore:

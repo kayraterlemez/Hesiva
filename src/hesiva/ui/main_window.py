@@ -1,5 +1,4 @@
 import logging
-from collections.abc import Iterable
 from datetime import date, datetime
 from pathlib import Path
 
@@ -19,7 +18,6 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
-    QMenu,
     QMessageBox,
     QPushButton,
     QSizePolicy,
@@ -46,6 +44,7 @@ from hesiva.read_models import (
 )
 from hesiva.services import (
     BackupError,
+    BackupPathError,
     BackupValidationError,
     RestoreRollbackError,
     ServiceError,
@@ -57,6 +56,7 @@ from hesiva.ui import (
     backup_dialogs,
     customer_dialogs,
     reminder_dialogs,
+    settings_dialogs,
 )
 from hesiva.ui.animal_dialogs import (
     AnimalFormDialog,
@@ -93,6 +93,7 @@ from hesiva.ui.report_dialogs import (
     YearlySummaryDialog,
 )
 from hesiva.ui.theme import APPLICATION_STYLESHEET
+from hesiva.version import get_application_version
 
 LOGGER = logging.getLogger(__name__)
 
@@ -255,17 +256,14 @@ class MainWindow(QMainWindow):
         report_menu.addAction(self.yearly_summary_action)
 
         settings_menu = self.menuBar().addMenu("Ayarlar")
-        self.change_password_action = QAction("Parola Değiştir", self)
-        self.change_password_action.triggered.connect(self._open_change_password_dialog)
-        settings_menu.addAction(self.change_password_action)
+        self.settings_action = QAction("Ayarlar...", self)
+        self.settings_action.triggered.connect(self._open_settings_dialog)
+        settings_menu.addAction(self.settings_action)
 
         help_menu = self.menuBar().addMenu("Yardım")
-        self._add_disabled_actions(help_menu, ("Hakkında",))
-
-    def _add_disabled_actions(self, menu: QMenu, labels: Iterable[str]) -> None:
-        for label in labels:
-            action = menu.addAction(label)
-            action.setEnabled(False)
+        self.about_action = QAction("Hakkında", self)
+        self.about_action.triggered.connect(self._open_about_dialog)
+        help_menu.addAction(self.about_action)
 
     def _create_central_widget(self) -> QWidget:
         central_widget = QWidget(self)
@@ -1930,6 +1928,66 @@ class MainWindow(QMainWindow):
                 "Hesiva parolası başarıyla değiştirildi.",
             )
 
+    def _open_settings_dialog(self) -> None:
+        try:
+            current_settings = self._application_context.settings.get_settings()
+        except Exception:
+            LOGGER.exception("Hesiva settings could not be loaded")
+            QMessageBox.warning(
+                self,
+                "Ayarlar Açılamadı",
+                "Hesiva ayarları yüklenemedi. Lütfen yeniden deneyin.",
+            )
+            return
+
+        dialog = settings_dialogs.SettingsDialog(current_settings, self)
+
+        def change_backup_location() -> None:
+            selected_directory = QFileDialog.getExistingDirectory(
+                dialog,
+                "Yedekleme Konumunu Seç",
+                str(dialog.backup_destination_directory),
+            )
+            if not selected_directory:
+                return
+            try:
+                self._application_context.settings.update_backup_destination_directory(
+                    Path(selected_directory)
+                )
+                dialog.set_settings(self._application_context.settings.get_settings())
+            except (ValidationError, ServiceError):
+                dialog_message = "Yedekleme konumu kaydedilemedi. Lütfen başka bir dizin seçin."
+                QMessageBox.warning(dialog, "Ayarlar Kaydedilemedi", dialog_message)
+            except Exception:
+                LOGGER.exception("The preferred backup destination could not be updated")
+                QMessageBox.warning(
+                    dialog,
+                    "Ayarlar Kaydedilemedi",
+                    "Yedekleme konumu kaydedilemedi. Lütfen yeniden deneyin.",
+                )
+
+        dialog.password_change_requested.connect(self._open_change_password_dialog)
+        dialog.backup_location_change_requested.connect(change_backup_location)
+        dialog.exec()
+        dialog.password_change_requested.disconnect(self._open_change_password_dialog)
+        dialog.backup_location_change_requested.disconnect(change_backup_location)
+        dialog.deleteLater()
+
+    def _open_about_dialog(self) -> None:
+        try:
+            application_version = get_application_version()
+        except Exception:
+            LOGGER.exception("The Hesiva application version could not be loaded")
+            QMessageBox.warning(
+                self,
+                "Hakkında Açılamadı",
+                "Hesiva sürüm bilgisi yüklenemedi. Lütfen yeniden deneyin.",
+            )
+            return
+        dialog = settings_dialogs.AboutDialog(application_version, self)
+        dialog.exec()
+        dialog.deleteLater()
+
     def _open_legacy_import_dialog(self) -> None:
         dialog = LegacyImportDialog(self._application_context, self)
         dialog.import_completed.connect(self._refresh_after_legacy_import)
@@ -1943,10 +2001,15 @@ class MainWindow(QMainWindow):
 
     def _open_backup_dialog(self) -> None:
         try:
-            backup_directory = self._application_context.prepare_default_backup_directory()
-        except OSError:
-            LOGGER.exception("The default backup directory could not be prepared")
-            backup_directory = self._application_context.database_path.parent
+            backup_directory = self._application_context.prepare_manual_backup_directory()
+        except Exception:
+            LOGGER.exception("The preferred backup directory could not be resolved")
+            QMessageBox.warning(
+                self,
+                "Yedekleme Açılamadı",
+                "Yedekleme konumu yüklenemedi. Ayarlar bölümünden konumu kontrol edin.",
+            )
+            return
         dialog = backup_dialogs.BackupDialog(backup_directory, self)
 
         def change_location() -> None:
@@ -1975,6 +2038,11 @@ class MainWindow(QMainWindow):
             dialog.set_busy(True)
             try:
                 metadata = self._application_context.create_backup(destination)
+            except BackupPathError:
+                LOGGER.warning("The selected manual-backup destination is unavailable")
+                dialog.show_operation_error(
+                    "Son yedekleme başarısız oldu: Yedekleme konumu kullanılamıyor."
+                )
             except BackupError:
                 LOGGER.exception("Hesiva backup creation failed")
                 dialog.show_operation_error("Son yedekleme başarısız oldu: Yedek oluşturulamadı.")

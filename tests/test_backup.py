@@ -37,6 +37,7 @@ from hesiva.services.backup_service import (
     DATABASE_ARCHIVE_NAME,
     METADATA_ARCHIVE_NAME,
 )
+from hesiva.version import get_application_version
 
 
 @pytest.fixture
@@ -118,7 +119,7 @@ def _write_database_archive(
     database_bytes = database_path.read_bytes()
     metadata = {
         "application": "Hesiva",
-        "application_version": "0.1.0",
+        "application_version": get_application_version(),
         "backup_format_version": BACKUP_FORMAT_VERSION,
         "created_at": datetime.now(UTC).isoformat(),
         "database_revision": _database_revision(database_path),

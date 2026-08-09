@@ -139,11 +139,12 @@ def test_initial_password_persists_exact_schema_without_plaintext_and_verifies(
     authentication.create_initial_password("güvenli parola", "güvenli parola")
 
     payload = json.loads(store.path.read_text(encoding="utf-8"))
-    assert set(payload) == {"format_version", "authentication"}
+    assert set(payload) == {"format_version", "authentication", "backup"}
     assert payload["format_version"] == CONFIG_FORMAT_VERSION
     assert set(payload["authentication"]) == {"password_hash", "setup_complete"}
     assert payload["authentication"]["setup_complete"] is False
     assert payload["authentication"]["password_hash"].startswith("$argon2id$")
+    assert payload["backup"] == {"destination_directory": None}
     assert "güvenli parola" not in store.path.read_text(encoding="utf-8")
     assert authentication.authentication_state() is AuthenticationState.INCOMPLETE
     assert authentication.has_password()
@@ -217,7 +218,10 @@ def test_password_change_preserves_setup_and_unknown_fields(
                     "setup_complete": True,
                     "future_auth_value": "koru",
                 },
-                "backup_destination": "/synthetic/path",
+                "backup": {
+                    "destination_directory": "/synthetic/path",
+                    "future_backup_value": "koru",
+                },
             }
         )
     )
@@ -228,7 +232,8 @@ def test_password_change_preserves_setup_and_unknown_fields(
     payload = store.load().to_payload()
     assert payload["authentication"]["setup_complete"] is True
     assert payload["authentication"]["future_auth_value"] == "koru"
-    assert payload["backup_destination"] == "/synthetic/path"
+    assert payload["backup"]["destination_directory"] == "/synthetic/path"
+    assert payload["backup"]["future_backup_value"] == "koru"
     assert not authentication.verify_password("eski")
     assert authentication.verify_password("yeni")
 

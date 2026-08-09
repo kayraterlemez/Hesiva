@@ -135,7 +135,8 @@ metadata.json
 
 `config.json` is the validated real application configuration snapshot. It contains the encoded
 Argon2id password hash and setup-completion state but never a plain-text password. The encoded hash
-is copied unchanged; backup creation does not rehash it.
+is copied unchanged; backup creation does not rehash it. It also preserves the optional preferred
+manual-backup directory in `backup.destination_directory`.
 
 `metadata.json` contains compatibility and verification metadata.
 
@@ -299,8 +300,9 @@ Unsupported future/unknown backup formats should be rejected with a clear explan
 
 Version 1 restores the validated archived `config.json` together with its database. This preserves
 the password hash exactly and makes the restored snapshot's password authoritative. Unknown valid
-configuration fields are preserved by normal credential updates. Any future machine-specific
-configuration field must define its own revalidation rule before being added to this format.
+configuration fields are preserved by normal credential and Settings updates. The restored
+`backup.destination_directory` is preserved unchanged even when it names a directory unavailable on
+the current machine. Its structural validity is separate from current availability.
 
 ---
 
@@ -309,9 +311,14 @@ configuration field must define its own revalidation rule before being added to 
 If the configured external backup destination is unavailable:
 
 - Normal application use should not become impossible.
-- The user should receive a clear warning.
-- A local fallback backup may be created when configured/appropriate.
-- The application should not falsely report the external backup as successful.
+- Authentication and business-data access continue normally.
+- A manual backup attempt fails with a clear warning.
+- Hesiva does not silently fall back or report success.
+- The user may select another preferred directory in Settings.
+
+Missing `backup` configuration or a `null` destination uses the established local application-data
+`backups` directory. Internal safety backups created during restore continue to use that controlled
+local directory regardless of the preferred manual-backup destination.
 
 ---
 

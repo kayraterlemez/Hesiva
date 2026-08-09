@@ -8,6 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from argon2 import PasswordHasher  # noqa: E402
 from argon2.low_level import Type  # noqa: E402
+from PySide6.QtCore import QTimer  # noqa: E402
 from PySide6.QtWidgets import QApplication, QDialog, QLineEdit, QMenu, QMessageBox  # noqa: E402
 
 from hesiva.application import create_application_context  # noqa: E402
@@ -156,7 +157,7 @@ def test_database_choice_has_only_frozen_setup_choices(
     application.processEvents()
 
 
-def test_main_window_exposes_only_password_change_in_settings(
+def test_main_window_settings_entry_reuses_password_change_flow(
     application: QApplication,
     context: ApplicationContext,
     monkeypatch: pytest.MonkeyPatch,
@@ -169,7 +170,7 @@ def test_main_window_exposes_only_password_change_in_settings(
     settings_menu = next(
         menu for menu in window.menuBar().findChildren(QMenu) if menu.title() == "Ayarlar"
     )
-    assert [action.text() for action in settings_menu.actions()] == ["Parola Değiştir"]
+    assert [action.text() for action in settings_menu.actions()] == ["Ayarlar..."]
     assert "reset" not in window.findChildren(QLineEdit)[0].objectName().lower()
 
     class FakeChangeDialog:
@@ -190,7 +191,18 @@ def test_main_window_exposes_only_password_change_in_settings(
         "information",
         lambda _parent, _title, message: messages.append(message) or QMessageBox.Ok,
     )
-    window.change_password_action.trigger()
+
+    def open_password_from_settings() -> None:
+        settings_dialog = next(
+            widget
+            for widget in QApplication.topLevelWidgets()
+            if widget.objectName() == "settingsDialog" and widget.isVisible()
+        )
+        settings_dialog.change_password_button.click()
+        settings_dialog.reject()
+
+    QTimer.singleShot(0, open_password_from_settings)
+    window.settings_action.trigger()
     assert messages == ["Hesiva parolası başarıyla değiştirildi."]
     window.close()
     application.processEvents()

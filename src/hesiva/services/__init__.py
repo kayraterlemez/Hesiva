@@ -34,6 +34,7 @@ from hesiva.services.exceptions import (
     PasswordAlreadyConfiguredError,
     PasswordMismatchError,
     ReminderNotFoundError,
+    SettingsPersistenceError,
     ServiceError,
     TransactionNotFoundError,
     ValidationError,
@@ -41,6 +42,7 @@ from hesiva.services.exceptions import (
 from hesiva.services.legacy_import_service import LegacyImportService
 from hesiva.services.reminder_service import ReminderService
 from hesiva.services.report_service import ReportService
+from hesiva.services.settings_service import ApplicationSettings, SettingsService
 from hesiva.services.transaction_service import TransactionService
 
 __all__ = [
@@ -51,6 +53,7 @@ __all__ = [
     "AuthenticationFailedError",
     "AuthenticationService",
     "AuthenticationState",
+    "ApplicationSettings",
     "BackupError",
     "BackupMetadata",
     "BackupPathError",
@@ -78,6 +81,8 @@ __all__ = [
     "RestoreResult",
     "RestoreRollbackError",
     "ServiceError",
+    "SettingsPersistenceError",
+    "SettingsService",
     "TransactionNotFoundError",
     "TransactionService",
     "ValidationError",

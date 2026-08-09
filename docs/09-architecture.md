@@ -906,9 +906,9 @@ Configuration may contain:
 
 - Password hash
 - Backup destination
-- Window state
-- UI preferences
-- Application preferences
+
+Version 1 does not introduce a generic preferences registry. Additional window, UI, or application
+preferences require a later explicit contract.
 
 Version 1 does not require inactivity-lock settings because the authenticated session remains unlocked until the application closes.
 
@@ -920,14 +920,29 @@ Version 1 configuration is stored in application-data `config.json` with this re
   "authentication": {
     "password_hash": "<valid encoded Argon2id hash>",
     "setup_complete": true
+  },
+  "backup": {
+    "destination_directory": null
   }
 }
 ```
+
+The `backup` object is optional when reading older valid configuration. Its
+`destination_directory` is `null` or a nonblank absolute POSIX/Windows path. Missing or `null`
+resolves through the same local fallback used by `BackupService`; a non-null value becomes the
+initial directory for future manual backups. `SettingsService` reads and updates this value through
+`ConfigurationStore`, preserving authentication and unrelated valid fields. Availability is checked
+when the user selects or uses the directory, not during authentication startup.
 
 Configuration writes use same-directory staging, file fsync, restrictive permissions, atomic
 replacement, and POSIX parent-directory fsync. Backup/restore treats the validated configuration
 and SQLite database as one logical snapshot and rolls both back from the safety backup after a
 failed publication.
+
+The runtime application version is resolved from the package metadata generated from
+`pyproject.toml` `project.version`, with source-tree execution reading that same project metadata.
+There is no independent V1 build identifier or duplicated UI version constant. License and
+copyright display is deferred until release preparation establishes authoritative metadata.
 
 Platform-specific application directories must be used instead of the installation directory.
 

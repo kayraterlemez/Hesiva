@@ -75,9 +75,18 @@ directory. Its required Version 1 shape is:
   "authentication": {
     "password_hash": "<valid encoded Argon2id hash>",
     "setup_complete": true
+  },
+  "backup": {
+    "destination_directory": null
   }
 }
 ```
+
+The `backup` object is optional for backward-compatible reads. Its destination is `null` or a
+nonblank absolute path. Structural validation does not require that a configured external directory
+is currently mounted: an unavailable but structurally valid destination is not credential
+corruption and does not block authentication or normal data access. Settings never displays the
+password hash or authentication internals.
 
 `setup_complete` is `false` after password creation until the empty/import choice completes. Writes
 use a fully written and fsynced same-directory temporary file, restrictive permissions, atomic
