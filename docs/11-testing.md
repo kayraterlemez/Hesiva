@@ -751,6 +751,13 @@ Authentication tests should verify:
 - Password hash verifies correctly
 - Changed password behavior if supported
 - Empty password behavior according to requirements
+- Exact `config.json` structure, malformed-state rejection, and unknown-field preservation
+- Locked production Argon2id parameters with a lower-cost injected test hasher where appropriate
+- Fresh, incomplete, complete, and blocked startup state transitions
+- No Main Window construction before successful authentication
+- Import-success/final-config-write recovery without duplicate import
+- Atomic credential publication and old-password preservation on failed password change
+- Real configuration in backups and pairwise database/configuration restore and rollback
 
 Tests must never assert or log real user passwords.
 

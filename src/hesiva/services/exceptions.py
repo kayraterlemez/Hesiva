@@ -6,6 +6,30 @@ class ValidationError(ServiceError):
     """Raised when application input violates a business validation rule."""
 
 
+class AuthenticationError(ServiceError):
+    """Base exception for expected local-authentication failures."""
+
+
+class AuthenticationFailedError(AuthenticationError):
+    """Raised when supplied authentication credentials do not verify."""
+
+
+class PasswordMismatchError(AuthenticationError):
+    """Raised when a new password and its confirmation differ."""
+
+
+class PasswordAlreadyConfiguredError(AuthenticationError):
+    """Raised when initial creation would overwrite an existing credential."""
+
+
+class InvalidCredentialStateError(AuthenticationError):
+    """Raised when persisted credential state is absent, malformed, or unusable."""
+
+
+class CredentialPersistenceError(AuthenticationError):
+    """Raised when credential configuration cannot be published durably."""
+
+
 class CustomerNotFoundError(ServiceError):
     """Raised when a requested customer does not exist."""
 

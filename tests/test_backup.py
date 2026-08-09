@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 from alembic import command
+from argon2 import PasswordHasher
+from argon2.low_level import Type
 
 from hesiva.application import create_application_context
 from hesiva.composition import ApplicationContext
@@ -38,8 +40,24 @@ from hesiva.services.backup_service import (
 
 
 @pytest.fixture
-def application_context(tmp_path: Path) -> Iterator[ApplicationContext]:
-    context = create_application_context(tmp_path / "live")
+def fast_hasher() -> PasswordHasher:
+    return PasswordHasher(
+        time_cost=1,
+        memory_cost=1024,
+        parallelism=1,
+        hash_len=16,
+        salt_len=8,
+        type=Type.ID,
+    )
+
+
+@pytest.fixture
+def application_context(
+    tmp_path: Path,
+    fast_hasher: PasswordHasher,
+) -> Iterator[ApplicationContext]:
+    context = create_application_context(tmp_path / "live", password_hasher=fast_hasher)
+    _configure_authentication(context, "live-password")
     try:
         yield context
     finally:
@@ -61,6 +79,11 @@ def _populate_representative_data(context: ApplicationContext, customer_name: st
         return customer.id
 
 
+def _configure_authentication(context: ApplicationContext, password: str) -> None:
+    context.authentication.create_initial_password(password, password)
+    context.authentication.mark_setup_complete()
+
+
 @contextmanager
 def _archive_database(archive_path: Path, tmp_path: Path) -> Iterator[Path]:
     database_path = tmp_path / f"{archive_path.stem}.sqlite"
@@ -74,6 +97,11 @@ def _archive_database(archive_path: Path, tmp_path: Path) -> Iterator[Path]:
         database_path.unlink(missing_ok=True)
 
 
+def _archive_config_payload(archive_path: Path) -> dict[str, object]:
+    with zipfile.ZipFile(archive_path, "r") as archive:
+        return json.loads(archive.read(CONFIG_ARCHIVE_NAME).decode("utf-8"))
+
+
 def _customer_names(database_path: Path) -> list[str]:
     with sqlite3.connect(database_path) as connection:
         return [
@@ -82,7 +110,11 @@ def _customer_names(database_path: Path) -> list[str]:
         ]
 
 
-def _write_database_archive(database_path: Path, archive_path: Path) -> None:
+def _write_database_archive(
+    database_path: Path,
+    archive_path: Path,
+    configuration_bytes: bytes,
+) -> None:
     database_bytes = database_path.read_bytes()
     metadata = {
         "application": "Hesiva",
@@ -96,7 +128,7 @@ def _write_database_archive(database_path: Path, archive_path: Path) -> None:
     }
     with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_STORED) as archive:
         archive.writestr(DATABASE_ARCHIVE_NAME, database_bytes)
-        archive.writestr(CONFIG_ARCHIVE_NAME, json.dumps({"format_version": 1}))
+        archive.writestr(CONFIG_ARCHIVE_NAME, configuration_bytes)
         archive.writestr(METADATA_ARCHIVE_NAME, json.dumps(metadata))
 
 
@@ -128,6 +160,11 @@ def test_backup_uses_online_api_and_preserves_representative_data(
             METADATA_ARCHIVE_NAME,
         }
         assert archive.testzip() is None
+        config_payload = json.loads(archive.read(CONFIG_ARCHIVE_NAME).decode("utf-8"))
+        assert config_payload["format_version"] == 1
+        assert config_payload["authentication"]["setup_complete"] is True
+        assert config_payload["authentication"]["password_hash"].startswith("$argon2id$")
+        assert "live-password" not in archive.read(CONFIG_ARCHIVE_NAME).decode("utf-8")
 
     with _archive_database(backup_path, tmp_path) as database_path:
         assert inspect_database(database_path).state is DatabaseState.CURRENT
@@ -156,7 +193,10 @@ def test_backup_rejects_live_path_and_failure_preserves_existing_target(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    service = BackupService(application_context.database_path)
+    service = BackupService(
+        application_context.database_path,
+        application_context.configuration_store,
+    )
     with pytest.raises(BackupPathError, match="live database"):
         service.create_backup(application_context.database_path)
 
@@ -220,7 +260,11 @@ def test_restore_validation_rejects_unsafe_sources_before_touching_live_database
         unrelated = tmp_path / "unrelated.sqlite"
         with sqlite3.connect(unrelated) as connection:
             connection.execute("CREATE TABLE unrelated (value TEXT)")
-        _write_database_archive(unrelated, candidate)
+        _write_database_archive(
+            unrelated,
+            candidate,
+            application_context.configuration_store.load().to_bytes(),
+        )
     elif kind == "truncated":
         valid = tmp_path / "valid.zip"
         application_context.create_backup(valid)
@@ -240,14 +284,15 @@ def test_validation_rejects_outdated_and_unknown_migration_databases(
     outdated_database = tmp_path / "outdated.sqlite"
     command.stamp(create_alembic_config(outdated_database), "base")
     outdated_archive = tmp_path / "outdated.zip"
-    _write_database_archive(outdated_database, outdated_archive)
+    config_bytes = application_context.configuration_store.load().to_bytes()
+    _write_database_archive(outdated_database, outdated_archive, config_bytes)
 
     invalid_database = tmp_path / "unknown.sqlite"
     initialize_database_to_head(invalid_database)
     with sqlite3.connect(invalid_database) as connection:
         connection.execute("UPDATE alembic_version SET version_num = 'unknown_revision'")
     invalid_archive = tmp_path / "unknown.zip"
-    _write_database_archive(invalid_database, invalid_archive)
+    _write_database_archive(invalid_database, invalid_archive, config_bytes)
 
     with pytest.raises(BackupValidationError, match="older"):
         application_context.validate_backup(outdated_archive)
@@ -257,11 +302,16 @@ def test_validation_rejects_outdated_and_unknown_migration_databases(
 
 def test_restore_replaces_dataset_rebinds_context_and_preserves_source_and_safety_backup(
     application_context: ApplicationContext,
+    fast_hasher: PasswordHasher,
     tmp_path: Path,
 ) -> None:
     _populate_representative_data(application_context, "Dataset A")
-    source_context = create_application_context(tmp_path / "source-b")
+    source_context = create_application_context(
+        tmp_path / "source-b",
+        password_hasher=fast_hasher,
+    )
     try:
+        _configure_authentication(source_context, "source-password")
         _populate_representative_data(source_context, "Dataset B")
         source_backup = tmp_path / "dataset-b.zip"
         source_context.create_backup(source_backup)
@@ -275,10 +325,17 @@ def test_restore_replaces_dataset_rebinds_context_and_preserves_source_and_safet
     assert inspect_database(application_context.database_path).state is DatabaseState.CURRENT
     assert _customer_names(application_context.database_path) == ["Dataset B"]
     assert hashlib.sha256(source_backup.read_bytes()).hexdigest() == source_digest
+    assert application_context.authentication.verify_password("source-password")
+    assert not application_context.authentication.verify_password("live-password")
     assert result.safety_backup_path.is_file()
     assert application_context.validate_backup(result.safety_backup_path)
     with _archive_database(result.safety_backup_path, tmp_path) as safety_database:
         assert _customer_names(safety_database) == ["Dataset A"]
+    safety_config = _archive_config_payload(result.safety_backup_path)
+    assert fast_hasher.verify(
+        safety_config["authentication"]["password_hash"],
+        "live-password",
+    )
     with application_context.services() as services:
         assert services.customer_summary.list_customer_summaries()[0].full_name == "Dataset B"
 
@@ -321,12 +378,17 @@ def test_safety_backup_failure_leaves_live_database_untouched(
 
 def test_failure_before_atomic_replacement_reopens_original_database(
     application_context: ApplicationContext,
+    fast_hasher: PasswordHasher,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _populate_representative_data(application_context, "Dataset A")
-    source_context = create_application_context(tmp_path / "source-b")
+    source_context = create_application_context(
+        tmp_path / "source-b",
+        password_hasher=fast_hasher,
+    )
     try:
+        _configure_authentication(source_context, "source-password")
         _populate_representative_data(source_context, "Dataset B")
         source_backup = tmp_path / "source-b.zip"
         source_context.create_backup(source_backup)
@@ -351,12 +413,17 @@ def test_failure_before_atomic_replacement_reopens_original_database(
 
 def test_post_replacement_reopen_failure_rolls_back_to_safety_backup(
     application_context: ApplicationContext,
+    fast_hasher: PasswordHasher,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _populate_representative_data(application_context, "Dataset A")
-    source_context = create_application_context(tmp_path / "source-b")
+    source_context = create_application_context(
+        tmp_path / "source-b",
+        password_hasher=fast_hasher,
+    )
     try:
+        _configure_authentication(source_context, "source-password")
         _populate_representative_data(source_context, "Dataset B")
         source_backup = tmp_path / "source-b.zip"
         source_context.create_backup(source_backup)
@@ -379,18 +446,25 @@ def test_post_replacement_reopen_failure_rolls_back_to_safety_backup(
         application_context.restore_backup(source_backup)
     assert reopen_count == 2
     assert _customer_names(application_context.database_path) == ["Dataset A"]
+    assert application_context.authentication.verify_password("live-password")
+    assert not application_context.authentication.verify_password("source-password")
     with application_context.services() as services:
         assert services.customer_summary.list_customer_summaries()[0].full_name == "Dataset A"
 
 
 def test_rollback_failure_preserves_safety_backup_and_reports_severe_failure(
     application_context: ApplicationContext,
+    fast_hasher: PasswordHasher,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _populate_representative_data(application_context, "Dataset A")
-    source_context = create_application_context(tmp_path / "source-b")
+    source_context = create_application_context(
+        tmp_path / "source-b",
+        password_hasher=fast_hasher,
+    )
     try:
+        _configure_authentication(source_context, "source-password")
         _populate_representative_data(source_context, "Dataset B")
         source_backup = tmp_path / "source-b.zip"
         source_context.create_backup(source_backup)
@@ -427,3 +501,95 @@ def test_existing_live_sidecar_aborts_before_replacement(
         assert _customer_names(application_context.database_path) == ["Dataset A"]
     finally:
         sidecar.unlink(missing_ok=True)
+
+
+def test_backup_validation_rejects_malformed_authentication_config(
+    application_context: ApplicationContext,
+    tmp_path: Path,
+) -> None:
+    valid_path = tmp_path / "valid.zip"
+    invalid_path = tmp_path / "invalid-config.zip"
+    application_context.create_backup(valid_path)
+
+    with (
+        zipfile.ZipFile(valid_path, "r") as source,
+        zipfile.ZipFile(
+            invalid_path,
+            "w",
+            compression=zipfile.ZIP_STORED,
+        ) as target,
+    ):
+        for name in source.namelist():
+            payload = source.read(name)
+            if name == CONFIG_ARCHIVE_NAME:
+                payload = json.dumps(
+                    {
+                        "format_version": 1,
+                        "authentication": {
+                            "password_hash": "malformed",
+                            "setup_complete": True,
+                        },
+                    }
+                ).encode("utf-8")
+            target.writestr(name, payload)
+
+    with pytest.raises(BackupValidationError, match="configuration"):
+        application_context.validate_backup(invalid_path)
+
+
+def test_backup_operations_never_log_password_hash(
+    application_context: ApplicationContext,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    password_hash = application_context.configuration_store.load().password_hash
+
+    application_context.create_backup(tmp_path / "private.zip")
+
+    assert password_hash not in caplog.text
+
+
+def test_config_publication_failure_rolls_back_database_and_configuration_pair(
+    application_context: ApplicationContext,
+    fast_hasher: PasswordHasher,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _populate_representative_data(application_context, "Dataset A")
+    source_context = create_application_context(
+        tmp_path / "source-b",
+        password_hasher=fast_hasher,
+    )
+    try:
+        _configure_authentication(source_context, "source-password")
+        _populate_representative_data(source_context, "Dataset B")
+        source_backup = tmp_path / "source-b.zip"
+        source_context.create_backup(source_backup)
+    finally:
+        source_context.close()
+
+    real_replace = os.replace
+    config_publication_failures = 0
+
+    def fail_first_config_publication(source: Path, destination: Path) -> None:
+        nonlocal config_publication_failures
+        if (
+            Path(destination) == application_context.configuration_store.path
+            and config_publication_failures == 0
+        ):
+            config_publication_failures += 1
+            raise OSError("synthetic config publication failure")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(
+        "hesiva.services.backup_service.os.replace",
+        fail_first_config_publication,
+    )
+
+    with pytest.raises(RestoreError, match="previous database was restored"):
+        application_context.restore_backup(source_backup)
+
+    assert config_publication_failures == 1
+    assert _customer_names(application_context.database_path) == ["Dataset A"]
+    assert application_context.authentication.verify_password("live-password")
+    assert not application_context.authentication.verify_password("source-password")

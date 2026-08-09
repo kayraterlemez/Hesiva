@@ -4,6 +4,8 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
+from argon2 import PasswordHasher  # noqa: E402
+from argon2.low_level import Type  # noqa: E402
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -27,8 +29,25 @@ def application() -> QApplication:
 
 
 @pytest.fixture
-def application_context(tmp_path: Path) -> Iterator[ApplicationContext]:
-    context = create_application_context(tmp_path / "ui-live")
+def fast_hasher() -> PasswordHasher:
+    return PasswordHasher(
+        time_cost=1,
+        memory_cost=1024,
+        parallelism=1,
+        hash_len=16,
+        salt_len=8,
+        type=Type.ID,
+    )
+
+
+@pytest.fixture
+def application_context(
+    tmp_path: Path,
+    fast_hasher: PasswordHasher,
+) -> Iterator[ApplicationContext]:
+    context = create_application_context(tmp_path / "ui-live", password_hasher=fast_hasher)
+    context.authentication.create_initial_password("live-password", "live-password")
+    context.authentication.mark_setup_complete()
     try:
         yield context
     finally:
@@ -198,6 +217,7 @@ def test_restore_confirmation_cancel_does_not_call_restore(
 def test_successful_restore_rebinds_window_to_restored_dataset(
     main_window: MainWindow,
     application_context: ApplicationContext,
+    fast_hasher: PasswordHasher,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -205,8 +225,13 @@ def test_successful_restore_rebinds_window_to_restored_dataset(
         services.customer.create_customer("Dataset A")
     main_window.refresh_customer_summaries()
 
-    source_context = create_application_context(tmp_path / "source-b")
+    source_context = create_application_context(
+        tmp_path / "source-b",
+        password_hasher=fast_hasher,
+    )
     try:
+        source_context.authentication.create_initial_password("source-password", "source-password")
+        source_context.authentication.mark_setup_complete()
         with source_context.services() as services:
             services.customer.create_customer("Dataset B")
         archive_path = tmp_path / "dataset-b.zip"

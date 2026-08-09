@@ -6,6 +6,7 @@ from pathlib import Path
 APPLICATION_DIRECTORY_NAME = "hesiva"
 WINDOWS_APPLICATION_DIRECTORY_NAME = "Hesiva"
 DATABASE_FILENAME = "hesiva.db"
+CONFIG_FILENAME = "config.json"
 
 
 def get_application_data_directory(
@@ -50,6 +51,16 @@ def get_production_database_path(application_data_directory: Path | None = None)
     return data_directory / DATABASE_FILENAME
 
 
+def get_config_path(application_data_directory: Path | None = None) -> Path:
+    """Return the persistent configuration path without creating it."""
+    data_directory = (
+        get_application_data_directory()
+        if application_data_directory is None
+        else application_data_directory
+    )
+    return data_directory / CONFIG_FILENAME
+
+
 def ensure_application_data_directory(application_data_directory: Path | None = None) -> Path:
     """Create the application data directory explicitly and return it."""
     data_directory = (
@@ -58,4 +69,6 @@ def ensure_application_data_directory(application_data_directory: Path | None = 
         else application_data_directory
     )
     data_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if os.name == "posix" and not data_directory.is_symlink():
+        data_directory.chmod(0o700)
     return data_directory

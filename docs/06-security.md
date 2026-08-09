@@ -32,6 +32,12 @@ Normal application operation requires no Internet connection.
 
 On first launch, the user creates and confirms a local application password.
 
+The password is persisted before the initial empty-database/Veresiye 5 import choice, with setup
+marked incomplete. Cancelling or failing that choice does not discard the credential. The next
+launch authenticates with the same password and resumes setup. If an import completed but final
+setup-state publication failed, the populated database plus valid incomplete credential is safely
+finalized after login without importing again.
+
 On later launches, successful password authentication is required before normal access.
 
 After login, Version 1 remains unlocked until the application is closed.
@@ -44,13 +50,47 @@ Automatic inactivity locking is not required for Version 1.
 
 Passwords must never be stored in plain text.
 
-Argon2id is the preferred password hashing algorithm.
+Argon2id is the required Version 1 password hashing algorithm. Production uses the maintained
+`argon2-cffi` high-level `PasswordHasher` with explicit parameters:
+
+- Type: Argon2id
+- Time cost: 3
+- Memory cost: 65536 KiB
+- Parallelism: 4
+- Hash length: 32 bytes
+- Salt length: 16 bytes
 
 A maintained library shall generate appropriate salts and parameters.
 
 The application shall store only the resulting password hash and required algorithm metadata.
 
 The original password must not be recoverable.
+
+The single credential/configuration store is `config.json` in the per-user Hesiva application-data
+directory. Its required Version 1 shape is:
+
+```json
+{
+  "format_version": 1,
+  "authentication": {
+    "password_hash": "<valid encoded Argon2id hash>",
+    "setup_complete": true
+  }
+}
+```
+
+`setup_complete` is `false` after password creation until the empty/import choice completes. Writes
+use a fully written and fsynced same-directory temporary file, restrictive permissions, atomic
+replacement, and POSIX parent-directory fsync. On POSIX the application-data directory is `0700`
+and `config.json` is `0600`.
+
+Missing configuration is legitimate only for a fresh empty business database. Missing, malformed,
+or unusable authentication configuration with a populated current database blocks startup without
+modifying the database. A valid encoded password hash with `setup_complete=false` is an incomplete,
+recoverable setup rather than corruption.
+
+Version 1 has no password reset, forgotten-password recovery, security question, recovery code,
+hint, default password, or backdoor.
 
 ---
 

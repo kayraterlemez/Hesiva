@@ -4,9 +4,11 @@ import sys
 from pathlib import Path
 
 from hesiva.database.paths import (
+    CONFIG_FILENAME,
     DATABASE_FILENAME,
     ensure_application_data_directory,
     get_application_data_directory,
+    get_config_path,
     get_production_database_path,
 )
 
@@ -57,12 +59,17 @@ def test_database_path_and_directory_creation_are_explicit(tmp_path: Path) -> No
     data_directory = tmp_path / "application-data"
 
     database_path = get_production_database_path(data_directory)
+    config_path = get_config_path(data_directory)
 
     assert DATABASE_FILENAME == "hesiva.db"
     assert database_path == data_directory / DATABASE_FILENAME
+    assert CONFIG_FILENAME == "config.json"
+    assert config_path == data_directory / CONFIG_FILENAME
     assert not data_directory.exists()
     assert ensure_application_data_directory(data_directory) == data_directory
     assert data_directory.is_dir()
+    if os.name == "posix":
+        assert data_directory.stat().st_mode & 0o777 == 0o700
 
 
 def test_importing_database_modules_has_no_data_directory_side_effect(tmp_path: Path) -> None:

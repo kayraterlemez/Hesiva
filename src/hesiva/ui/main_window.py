@@ -51,7 +51,13 @@ from hesiva.services import (
     ServiceError,
     ValidationError,
 )
-from hesiva.ui import animal_dialogs, backup_dialogs, customer_dialogs, reminder_dialogs
+from hesiva.ui import (
+    animal_dialogs,
+    auth_dialogs,
+    backup_dialogs,
+    customer_dialogs,
+    reminder_dialogs,
+)
 from hesiva.ui.animal_dialogs import (
     AnimalFormDialog,
     AnimalFormValues,
@@ -249,7 +255,9 @@ class MainWindow(QMainWindow):
         report_menu.addAction(self.yearly_summary_action)
 
         settings_menu = self.menuBar().addMenu("Ayarlar")
-        self._add_disabled_actions(settings_menu, ("Ayarlar",))
+        self.change_password_action = QAction("Parola Değiştir", self)
+        self.change_password_action.triggered.connect(self._open_change_password_dialog)
+        settings_menu.addAction(self.change_password_action)
 
         help_menu = self.menuBar().addMenu("Yardım")
         self._add_disabled_actions(help_menu, ("Hakkında",))
@@ -1910,6 +1918,17 @@ class MainWindow(QMainWindow):
 
     def _show_financial_operation_error(self, message: str) -> None:
         QMessageBox.warning(self, "İşlem Tamamlanamadı", message)
+
+    def _open_change_password_dialog(self) -> None:
+        dialog = auth_dialogs.PasswordChangeDialog(self._application_context.authentication, self)
+        changed = dialog.exec() == QDialog.DialogCode.Accepted
+        dialog.deleteLater()
+        if changed:
+            QMessageBox.information(
+                self,
+                "Parola Değiştirildi",
+                "Hesiva parolası başarıyla değiştirildi.",
+            )
 
     def _open_legacy_import_dialog(self) -> None:
         dialog = LegacyImportDialog(self._application_context, self)

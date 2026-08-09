@@ -672,6 +672,8 @@ AuthService
         ↓
 Argon2id verification
         ↓
+Atomic application-data config.json
+        ↓
 Success / Failure
 ```
 
@@ -680,6 +682,16 @@ The UI never performs password hashing itself.
 Passwords are never stored in plain text.
 
 Only password hashes are stored.
+
+`AuthenticationService` owns initial creation, verification, setup completion, and password
+change. `ConfigurationStore` validates the exact Version 1 configuration schema and performs
+same-directory atomic durable writes. Qt widgets do not parse JSON or invoke Argon2 directly.
+
+Startup classifies authentication as absent, valid incomplete, valid complete, or invalid. Only an
+empty business database plus absent configuration may create an initial password. Valid incomplete
+setup authenticates and resumes the empty/import choice, or finalizes directly when a completed
+import already populated the database. A populated database without a usable credential is blocked.
+`MainWindow` is constructed only after the applicable authentication/setup transition succeeds.
 
 Authentication in Version 1 is application-level protection.
 
@@ -719,7 +731,8 @@ SQLite may use additional journal or WAL files.
 
 Backups should therefore use a SQLite-safe backup mechanism such as the SQLite Online Backup API.
 
-After the database snapshot is created, backup metadata and configuration may be added to the final archive.
+After the database snapshot is created, the validated real `config.json` and backup metadata are
+added to the final archive.
 
 The resulting backup must be verified before being reported as successful.
 
@@ -734,13 +747,13 @@ User selects backup
         ↓
 Verify backup
         ↓
-Create safety backup of current database
+Create safety backup of current database and configuration
         ↓
 Close active database sessions
         ↓
-Restore selected database
+Publish selected database and configuration pair
         ↓
-Verify restored database
+Verify restored database and configuration
         ↓
 Restart or reinitialize application
 ```
@@ -899,7 +912,22 @@ Configuration may contain:
 
 Version 1 does not require inactivity-lock settings because the authenticated session remains unlocked until the application closes.
 
-Configuration may be stored in a platform-appropriate file such as `config.json`, using safe/atomic writes where appropriate.
+Version 1 configuration is stored in application-data `config.json` with this required structure:
+
+```json
+{
+  "format_version": 1,
+  "authentication": {
+    "password_hash": "<valid encoded Argon2id hash>",
+    "setup_complete": true
+  }
+}
+```
+
+Configuration writes use same-directory staging, file fsync, restrictive permissions, atomic
+replacement, and POSIX parent-directory fsync. Backup/restore treats the validated configuration
+and SQLite database as one logical snapshot and rolls both back from the safety backup after a
+failed publication.
 
 Platform-specific application directories must be used instead of the installation directory.
 

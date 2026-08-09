@@ -31,6 +31,10 @@ class LegacyImportService:
         self._ensure_empty_destination()
         return plan.preflight
 
+    def is_destination_empty(self) -> bool:
+        """Return whether the business database has no import-relevant records."""
+        return self._repository.business_record_counts().is_empty
+
     def import_source(
         self,
         source_path: Path,

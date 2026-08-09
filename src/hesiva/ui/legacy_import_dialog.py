@@ -22,6 +22,7 @@ from hesiva.composition import ApplicationContext
 from hesiva.read_models import LegacyImportPreflight, LegacyImportResult
 from hesiva.services import LegacyImportError
 from hesiva.ui.presentation import format_date, format_money_kurus
+from hesiva.ui.theme import APPLICATION_STYLESHEET
 
 
 LOGGER = logging.getLogger(__name__)
@@ -86,6 +87,7 @@ class LegacyImportDialog(QDialog):
         self.setWindowTitle("Eski Verileri İçe Aktar")
         self.setObjectName("legacyImportDialog")
         self.setModal(True)
+        self.setStyleSheet(APPLICATION_STYLESHEET)
         self.resize(820, 520)
         self.setMinimumSize(720, 470)
 

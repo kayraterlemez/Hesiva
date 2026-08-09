@@ -325,7 +325,9 @@ Priority: High
 
 Passwords shall never be stored in plain text.
 
-Argon2id is the preferred password hashing algorithm.
+Passwords shall be stored only as encoded Argon2id hashes in the application-data `config.json`.
+Production hashing uses time cost 3, memory cost 65536 KiB, parallelism 4, hash length 32, and salt
+length 16.
 
 Priority: Critical
 
@@ -348,6 +350,21 @@ The application password provides application-level access control only.
 It shall not be described as encryption of the SQLite database.
 
 Priority: High
+
+---
+
+### V1 Authentication State Contract
+
+First run shall create the local password before offering **Boş Veritabanıyla Başla** or **Eski
+Veresiye 5 Verilerini İçe Aktar**. Password creation persists an incomplete setup state; completing
+either choice marks setup complete. Reopening an incomplete setup requires the existing password and
+then resumes or safely finalizes setup without creating a second password.
+
+A current populated business database with missing, malformed, or unusable authentication
+configuration shall be blocked without modifying business data. A populated database with a valid
+password and incomplete setup is recoverable after login.
+
+Version 1 shall not provide password reset, recovery, hints, default credentials, or backdoors.
 
 ---
 

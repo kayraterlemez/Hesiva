@@ -133,7 +133,9 @@ metadata.json
 
 `database.sqlite` contains all business entities including customers, transactions, animals, and reminders.
 
-`config.json` contains restorable application configuration when appropriate. It must never contain a plain-text password.
+`config.json` is the validated real application configuration snapshot. It contains the encoded
+Argon2id password hash and setup-completion state but never a plain-text password. The encoded hash
+is copied unchanged; backup creation does not rehash it.
 
 `metadata.json` contains compatibility and verification metadata.
 
@@ -228,7 +230,7 @@ Validate archive
         ↓
 Validate contained SQLite database
         ↓
-Create safety backup of current data
+Create safety backup of current database and configuration
         ↓
 Close active database sessions
         ↓
@@ -236,11 +238,11 @@ Extract selected backup to temporary location
         ↓
 Verify extracted database again
         ↓
-Replace current data using controlled/atomic file operations
+Publish the replacement database and configuration as one logical snapshot
         ↓
 Reinitialize/restart application
         ↓
-Verify restored database
+Verify restored database and configuration
 ```
 
 The current database must not be destroyed before the selected replacement has passed validation.
@@ -248,13 +250,16 @@ The current database must not be destroyed before the selected replacement has p
 The current Version 1 restore accepts only a verified archive whose contained database is already
 at the Alembic head bundled with the running Hesiva version. Older and unknown revisions are
 rejected; restore does not silently migrate them. Before replacement, Hesiva creates and preserves
-a verified safety archive in the local `backups` directory. After atomic replacement, the
-application context is rebuilt and database-derived Main Window state is cleared and reloaded in
-process.
+a verified safety archive containing the current database and current valid configuration in the
+local `backups` directory. The staged database and configuration are each complete and durable
+before pair publication. After publication, the application context is rebuilt and database-derived
+Main Window state is cleared and reloaded in process.
 
-The selected archive remains source-only. If the restored database cannot be reopened, Hesiva
-automatically rolls the live path back from the safety archive. A rollback failure is reported as a
-severe recovery error and the safety archive is retained.
+The selected archive remains source-only. Restore publishes both `database.sqlite` and
+`config.json`; the password from the restored snapshot is subsequently required. If either pair
+publication, database reopening, or post-publication validation fails, Hesiva rolls both live files
+back from the safety archive. A mixed old/new pair is never reported as success. A rollback failure
+is reported as a severe recovery error and the safety archive is retained.
 
 ---
 
@@ -292,11 +297,10 @@ Unsupported future/unknown backup formats should be rejected with a clear explan
 
 # Configuration Recovery
 
-Because the archive may contain configuration, restore behavior must define whether current configuration or archived configuration is used.
-
-Version 1 should restore only configuration values that are safe and meaningful on the current machine.
-
-Machine-specific paths such as a disconnected external backup destination may need to be revalidated rather than blindly applied.
+Version 1 restores the validated archived `config.json` together with its database. This preserves
+the password hash exactly and makes the restored snapshot's password authoritative. Unknown valid
+configuration fields are preserved by normal credential updates. Any future machine-specific
+configuration field must define its own revalidation rule before being added to this format.
 
 ---
 

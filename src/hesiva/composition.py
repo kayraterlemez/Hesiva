@@ -3,11 +3,14 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from argon2 import PasswordHasher
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from hesiva.database.engine import create_sqlite_engine
+from hesiva.database.paths import get_config_path
 from hesiva.database.session import create_session_factory
+from hesiva.configuration import ConfigurationStore
 from hesiva.repositories import (
     AnimalRepository,
     CustomerRepository,
@@ -19,6 +22,7 @@ from hesiva.repositories import (
 from hesiva.services import (
     AccountHistoryService,
     AnimalService,
+    AuthenticationService,
     BackupMetadata,
     BackupService,
     CustomerDetailService,
@@ -54,12 +58,14 @@ class ApplicationContext:
     database_path: Path
     engine: Engine
     session_factory: sessionmaker[Session]
+    configuration_store: ConfigurationStore
+    authentication: AuthenticationService
     _active_service_scopes: int = field(default=0, init=False, repr=False)
     _database_available: bool = field(default=True, init=False, repr=False)
     _backup_service: BackupService = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self._backup_service = BackupService(self.database_path)
+        self._backup_service = BackupService(self.database_path, self.configuration_store)
 
     @contextmanager
     def services(self) -> Iterator[ServiceSet]:
@@ -127,9 +133,15 @@ class ApplicationContext:
         self._database_available = False
 
     def _reopen_database_after_restore(self) -> None:
-        reopened_context = build_application_context(self.database_path)
-        self.engine = reopened_context.engine
-        self.session_factory = reopened_context.session_factory
+        engine = create_sqlite_engine(self.database_path)
+        try:
+            with engine.connect() as connection:
+                connection.scalar(text("SELECT 1"))
+        except Exception:
+            engine.dispose()
+            raise
+        self.engine = engine
+        self.session_factory = create_session_factory(engine)
         self._database_available = True
 
     def close(self) -> None:
@@ -138,7 +150,11 @@ class ApplicationContext:
         self._database_available = False
 
 
-def build_application_context(database_path: Path) -> ApplicationContext:
+def build_application_context(
+    database_path: Path,
+    *,
+    password_hasher: PasswordHasher | None = None,
+) -> ApplicationContext:
     """Open the initialized database and build application-level dependencies."""
     engine = create_sqlite_engine(database_path)
     try:
@@ -148,8 +164,11 @@ def build_application_context(database_path: Path) -> ApplicationContext:
         engine.dispose()
         raise
 
+    configuration_store = ConfigurationStore(get_config_path(database_path.parent))
     return ApplicationContext(
         database_path=database_path,
         engine=engine,
         session_factory=create_session_factory(engine),
+        configuration_store=configuration_store,
+        authentication=AuthenticationService(configuration_store, password_hasher),
     )

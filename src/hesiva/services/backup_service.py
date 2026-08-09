@@ -13,6 +13,12 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
+from hesiva.configuration import (
+    ApplicationConfiguration,
+    ConfigurationError,
+    ConfigurationStore,
+    InvalidConfigurationError,
+)
 from hesiva.database.durability import sync_file, sync_parent_directory
 from hesiva.database.startup import DatabaseState, inspect_database
 
@@ -72,11 +78,18 @@ class RestoreResult:
 class BackupService:
     """Create, verify, and restore portable Hesiva backup archives."""
 
-    def __init__(self, live_database_path: Path) -> None:
+    def __init__(
+        self,
+        live_database_path: Path,
+        configuration_store: ConfigurationStore | None = None,
+    ) -> None:
         resolved_path = live_database_path.expanduser()
         if not resolved_path.is_absolute():
             raise ValueError("The live database path must be absolute.")
         self.live_database_path = resolved_path
+        self.configuration_store = configuration_store or ConfigurationStore(
+            resolved_path.parent / CONFIG_ARCHIVE_NAME
+        )
 
     def prepare_default_backup_directory(self) -> Path:
         """Create the documented local fallback directory with private permissions."""
@@ -92,12 +105,13 @@ class BackupService:
         snapshot_path = self._new_temporary_path(destination.parent, ".snapshot.sqlite")
         archive_path = self._new_temporary_path(destination.parent, ".backup.zip")
         try:
+            configuration = self._load_live_configuration()
             self._online_backup(self.live_database_path, snapshot_path)
             self._validate_current_database(snapshot_path)
             sync_file(snapshot_path)
 
             metadata = self._build_metadata(snapshot_path)
-            self._write_archive(archive_path, snapshot_path, metadata)
+            self._write_archive(archive_path, snapshot_path, configuration, metadata)
             sync_file(archive_path)
             verified_metadata = self.validate_backup(archive_path)
 
@@ -116,7 +130,7 @@ class BackupService:
     def validate_backup(self, backup_path: Path) -> BackupMetadata:
         """Validate one Hesiva backup without changing it or the live database."""
         source = self._validate_source_path(backup_path)
-        with self._validated_archive_database(source) as (_, metadata):
+        with self._validated_archive_database(source) as (_, _, metadata):
             return metadata
 
     def restore_backup(
@@ -128,7 +142,11 @@ class BackupService:
     ) -> RestoreResult:
         """Replace the live database and roll back automatically if reopening fails."""
         source = self._validate_source_path(backup_path)
-        with self._validated_archive_database(source) as (candidate_database, metadata):
+        with self._validated_archive_database(source) as (
+            candidate_database,
+            candidate_configuration,
+            metadata,
+        ):
             replacement_path = self._new_temporary_path(
                 self.live_database_path.parent,
                 ".restore.sqlite",
@@ -137,20 +155,29 @@ class BackupService:
                 self._online_backup(candidate_database, replacement_path)
                 self._validate_current_database(replacement_path)
                 sync_file(replacement_path)
-                safety_backup_path = self._create_safety_backup()
-                return self._publish_restore(
-                    replacement_path,
-                    metadata,
-                    safety_backup_path,
-                    close_live_database,
-                    reopen_live_database,
+                replacement_config_path = self.configuration_store.stage(
+                    candidate_configuration,
+                    suffix=".restore-config.json",
                 )
+                try:
+                    safety_backup_path = self._create_safety_backup()
+                    return self._publish_restore(
+                        replacement_path,
+                        replacement_config_path,
+                        metadata,
+                        safety_backup_path,
+                        close_live_database,
+                        reopen_live_database,
+                    )
+                finally:
+                    replacement_config_path.unlink(missing_ok=True)
             finally:
                 self._remove_temporary_database(replacement_path)
 
     def _publish_restore(
         self,
         replacement_path: Path,
+        replacement_config_path: Path,
         metadata: BackupMetadata,
         safety_backup_path: Path,
         close_live_database: Callable[[], None],
@@ -164,11 +191,14 @@ class BackupService:
             self._ensure_no_live_sidecars()
             os.replace(replacement_path, self.live_database_path)
             database_replaced = True
+            os.replace(replacement_config_path, self.configuration_store.path)
             self._set_private_permissions(self.live_database_path)
-            sync_parent_directory(self.live_database_path)
+            self._set_private_permissions(self.configuration_store.path)
+            sync_parent_directory(self.configuration_store.path)
             reopen_live_database()
             database_closed = False
             self._validate_current_database(self.live_database_path)
+            self.configuration_store.load()
         except Exception as restore_error:
             if not database_replaced:
                 if database_closed:
@@ -182,7 +212,8 @@ class BackupService:
                 reopen_live_database,
             )
             raise RestoreError(
-                "The restored database could not be reopened; the previous database was restored."
+                "The restored application snapshot could not be reopened; the previous database "
+                "was restored together with its configuration."
             ) from restore_error
 
         return RestoreResult(metadata, safety_backup_path)
@@ -197,21 +228,30 @@ class BackupService:
             self.live_database_path.parent,
             ".rollback.sqlite",
         )
+        rollback_config_path: Path | None = None
         try:
-            close_live_database()
-            self._remove_live_sidecars_for_rollback()
             with self._validated_archive_database(safety_backup_path) as (
                 safety_database,
+                safety_configuration,
                 _,
             ):
                 self._online_backup(safety_database, rollback_path)
             self._validate_current_database(rollback_path)
             sync_file(rollback_path)
+            rollback_config_path = self.configuration_store.stage(
+                safety_configuration,
+                suffix=".rollback-config.json",
+            )
+            close_live_database()
+            self._remove_live_sidecars_for_rollback()
             os.replace(rollback_path, self.live_database_path)
+            os.replace(rollback_config_path, self.configuration_store.path)
             self._set_private_permissions(self.live_database_path)
-            sync_parent_directory(self.live_database_path)
+            self._set_private_permissions(self.configuration_store.path)
+            sync_parent_directory(self.configuration_store.path)
             reopen_live_database()
             self._validate_current_database(self.live_database_path)
+            self.configuration_store.load()
         except Exception as rollback_error:
             raise RestoreRollbackError(
                 "Restore and automatic rollback failed. The safety backup was preserved.",
@@ -219,6 +259,8 @@ class BackupService:
             ) from rollback_error
         finally:
             self._remove_temporary_database(rollback_path)
+            if rollback_config_path is not None:
+                rollback_config_path.unlink(missing_ok=True)
 
     def _reopen_original_or_raise(
         self,
@@ -267,7 +309,7 @@ class BackupService:
     def _validated_archive_database(
         self,
         archive_path: Path,
-    ) -> Iterator[tuple[Path, BackupMetadata]]:
+    ) -> Iterator[tuple[Path, ApplicationConfiguration, BackupMetadata]]:
         try:
             with tempfile.TemporaryDirectory(prefix="hesiva-backup-validation-") as directory:
                 database_path = Path(directory) / DATABASE_ARCHIVE_NAME
@@ -281,16 +323,17 @@ class BackupService:
                         raise BackupValidationError("The selected backup archive is corrupt.")
                     metadata_payload = self._read_json_member(archive, METADATA_ARCHIVE_NAME)
                     config_payload = self._read_json_member(archive, CONFIG_ARCHIVE_NAME)
-                    if (
-                        not isinstance(config_payload, dict)
-                        or config_payload.get("format_version") != BACKUP_FORMAT_VERSION
-                    ):
-                        raise BackupValidationError("The backup configuration is invalid.")
+                    try:
+                        configuration = ApplicationConfiguration.from_payload(config_payload)
+                    except InvalidConfigurationError as error:
+                        raise BackupValidationError(
+                            "The backup configuration is invalid."
+                        ) from error
                     self._copy_archive_member(archive, DATABASE_ARCHIVE_NAME, database_path)
 
                 metadata = self._parse_metadata(metadata_payload)
                 self._validate_metadata_database(database_path, metadata)
-                yield database_path, metadata
+                yield database_path, configuration, metadata
         except BackupValidationError:
             raise
         except (OSError, ValueError, zipfile.BadZipFile, json.JSONDecodeError) as error:
@@ -344,18 +387,27 @@ class BackupService:
         self,
         archive_path: Path,
         snapshot_path: Path,
+        configuration: ApplicationConfiguration,
         metadata: BackupMetadata,
     ) -> None:
         with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_STORED) as archive:
             archive.write(snapshot_path, DATABASE_ARCHIVE_NAME)
             archive.writestr(
                 CONFIG_ARCHIVE_NAME,
-                json.dumps({"format_version": BACKUP_FORMAT_VERSION}, sort_keys=True),
+                configuration.to_bytes(),
             )
             archive.writestr(
                 METADATA_ARCHIVE_NAME,
                 json.dumps(self._metadata_payload(metadata), sort_keys=True),
             )
+
+    def _load_live_configuration(self) -> ApplicationConfiguration:
+        try:
+            return self.configuration_store.load()
+        except ConfigurationError as error:
+            raise BackupValidationError(
+                "The live authentication configuration is missing or invalid."
+            ) from error
 
     def _build_metadata(self, database_path: Path) -> BackupMetadata:
         status = inspect_database(database_path)

@@ -71,6 +71,8 @@ Tasks:
 - Password creation
 - Argon2id verification
 - Login window
+- Interrupted first-run resume and conservative populated-database authentication gate
+- Password change
 - Main application composition
 - Main window shell
 - Central exception handling
@@ -332,6 +334,9 @@ Project foundation and minimal application launch.
 ## Version 0.2
 
 Database, configuration, authentication, and main window shell.
+
+Authentication uses the application-data `config.json`, gates the Main Window, resumes incomplete
+setup after login, and includes password change without a Version 1 reset/recovery mechanism.
 
 ## Version 0.3
 

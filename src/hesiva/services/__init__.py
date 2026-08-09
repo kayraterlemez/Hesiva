@@ -1,4 +1,9 @@
 from hesiva.services.account_history_service import AccountHistoryService
+from hesiva.services.authentication_service import (
+    AuthenticationService,
+    AuthenticationState,
+    create_production_password_hasher,
+)
 from hesiva.services.animal_service import AnimalService
 from hesiva.services.backup_service import (
     BackupError,
@@ -15,13 +20,19 @@ from hesiva.services.customer_service import CustomerService
 from hesiva.services.customer_summary_service import CustomerSummaryService
 from hesiva.services.exceptions import (
     AnimalNotFoundError,
+    AuthenticationError,
+    AuthenticationFailedError,
+    CredentialPersistenceError,
     CustomerNotFoundError,
     InvalidAnimalOwnershipError,
+    InvalidCredentialStateError,
     InvalidStateTransitionError,
     LegacyImportDestinationNotEmptyError,
     LegacyImportError,
     LegacyImportSourceError,
     LegacyImportVerificationError,
+    PasswordAlreadyConfiguredError,
+    PasswordMismatchError,
     ReminderNotFoundError,
     ServiceError,
     TransactionNotFoundError,
@@ -36,6 +47,10 @@ __all__ = [
     "AccountHistoryService",
     "AnimalNotFoundError",
     "AnimalService",
+    "AuthenticationError",
+    "AuthenticationFailedError",
+    "AuthenticationService",
+    "AuthenticationState",
     "BackupError",
     "BackupMetadata",
     "BackupPathError",
@@ -45,13 +60,17 @@ __all__ = [
     "CustomerDetailService",
     "CustomerService",
     "CustomerSummaryService",
+    "CredentialPersistenceError",
     "InvalidAnimalOwnershipError",
+    "InvalidCredentialStateError",
     "InvalidStateTransitionError",
     "LegacyImportDestinationNotEmptyError",
     "LegacyImportError",
     "LegacyImportService",
     "LegacyImportSourceError",
     "LegacyImportVerificationError",
+    "PasswordAlreadyConfiguredError",
+    "PasswordMismatchError",
     "ReminderNotFoundError",
     "ReminderService",
     "ReportService",
@@ -62,4 +81,5 @@ __all__ = [
     "TransactionNotFoundError",
     "TransactionService",
     "ValidationError",
+    "create_production_password_hasher",
 ]
