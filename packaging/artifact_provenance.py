@@ -25,10 +25,18 @@ SOURCE_INPUTS = (
     Path("packaging/Hesiva.spec"),
     Path("packaging/pyinstaller_support.py"),
     Path("packaging/linux_runtime_audit.py"),
+    Path("packaging/license_inventory.py"),
+    Path("packaging/license-policy.json"),
+    Path("packaging/lgpl-source-requirements.json"),
+    Path("packaging/native-license-approvals.json"),
     Path("packaging/icons"),
     Path("packaging/linux"),
     Path("packaging/debian"),
     Path("LICENSE"),
+    Path("THIRD_PARTY_NOTICES.md"),
+    Path("SOURCE-OFFER.md"),
+    Path("RELINKING.md"),
+    Path("licenses"),
     Path("pyproject.toml"),
 )
 IGNORED_SOURCE_DIRECTORIES = {"__pycache__"}

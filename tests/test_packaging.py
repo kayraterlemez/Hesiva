@@ -1,4 +1,6 @@
 import configparser
+import hashlib
+import json
 import runpy
 import shutil
 import tomllib
@@ -182,6 +184,187 @@ def test_mit_license_and_project_metadata_are_consistent() -> None:
     assert project["project"]["version"] == get_application_version()
 
 
+def _load_license_inventory() -> dict[str, object]:
+    return runpy.run_path(str(REPOSITORY_ROOT / "packaging/license_inventory.py"))
+
+
+def test_exact_third_party_legal_corpus_is_present_and_version_locked() -> None:
+    licensing = _load_license_inventory()
+    policy = licensing["verify_build_environment"]()
+
+    assert policy["application_version"] == get_application_version()
+    assert policy["qt_version"] == "6.11.1"
+    assert policy["cpython_version"] == "3.13.14"
+    assert (REPOSITORY_ROOT / "THIRD_PARTY_NOTICES.md").is_file()
+    assert (REPOSITORY_ROOT / "SOURCE-OFFER.md").is_file()
+    assert (REPOSITORY_ROOT / "RELINKING.md").is_file()
+    assert (REPOSITORY_ROOT / "licenses/Qt-6.11.1/LGPL-3.0-only.txt").stat().st_size > 1000
+    assert (REPOSITORY_ROOT / "licenses/CPython-3.13.14/LICENSE.txt").stat().st_size > 1000
+    assert (REPOSITORY_ROOT / "licenses/PyInstaller-6.22.0/COPYING.txt").stat().st_size > 1000
+    assert len(list((REPOSITORY_ROOT / "licenses/Qt-6.11.1/third-party").glob("*.html"))) > 50
+    source_requirements = json.loads(
+        (REPOSITORY_ROOT / "packaging/lgpl-source-requirements.json").read_text(encoding="utf-8")
+    )
+    source_names = {entry["filename"] for entry in source_requirements["required_archives"]}
+    assert "qtwebengine-everywhere-src-6.11.1.tar.xz" in source_names
+    assert "pyside-setup-everywhere-src-6.11.1.tar.xz" in source_names
+    assert not any("virtualkeyboard" in name.casefold() for name in source_names)
+    assert all(
+        len(entry["sha256"]) == 64 and entry["size"] > 0
+        for entry in source_requirements["required_archives"]
+    )
+
+
+def test_license_policy_rejects_dependency_version_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    licensing = _load_license_inventory()
+    real_version = licensing["verify_build_environment"].__globals__["importlib"].metadata.version
+
+    def drifted_version(name: str) -> str:
+        return "99.0" if name == "PySide6" else real_version(name)
+
+    monkeypatch.setattr(
+        licensing["verify_build_environment"].__globals__["importlib"].metadata,
+        "version",
+        drifted_version,
+    )
+
+    with pytest.raises(licensing["LicenseInventoryError"], match="version drift: PySide6"):
+        licensing["verify_build_environment"]()
+
+
+def test_runtime_legal_inventory_is_tied_to_exact_frozen_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    licensing = _load_license_inventory()
+    runtime = tmp_path / "Hesiva"
+    (runtime / "_internal").mkdir(parents=True)
+    (runtime / "Hesiva").write_bytes(b"synthetic executable")
+    toc = tmp_path / "COLLECT-00.toc"
+    toc.write_text("([('Hesiva', '/synthetic/libhesiva.so', 'BINARY')],)\n", encoding="utf-8")
+    copyright_file = tmp_path / "copyright"
+    copyright_file.write_text("Authoritative synthetic package copyright\n", encoding="utf-8")
+    native_record = {
+        "binary_package": "libsynthetic1:amd64",
+        "binary_version": "1.2.3-1",
+        "source_package": "synthetic",
+        "source_version": "1.2.3-1",
+        "runtime_entries": ["Hesiva"],
+    }
+    monkeypatch.setitem(
+        licensing["stage_linux_runtime"].__globals__,
+        "_native_debian_inventory",
+        lambda _entries, _repository_root: (
+            [native_record],
+            {"libsynthetic1_amd64": copyright_file},
+        ),
+    )
+
+    inventory = licensing["stage_linux_runtime"](
+        runtime,
+        toc,
+        repository_root=REPOSITORY_ROOT,
+    )
+
+    assert inventory["native_debian_packages"] == [native_record]
+    assert (runtime / "THIRD_PARTY_NOTICES.md").is_file()
+    assert (runtime / "licenses/Native-Debian/libsynthetic1_amd64/copyright").is_file()
+    licensing["verify_runtime"](runtime, repository_root=REPOSITORY_ROOT)
+    with pytest.raises(licensing["LicenseInventoryError"], match="license/source review"):
+        licensing["verify_runtime"](
+            runtime,
+            repository_root=REPOSITORY_ROOT,
+            require_redistribution=True,
+        )
+
+    staged_notice = runtime / "THIRD_PARTY_NOTICES.md"
+    approved_notice = staged_notice.read_bytes()
+    staged_notice.write_bytes(b"stale notices")
+    with pytest.raises(licensing["LicenseInventoryError"], match="legal corpus differs"):
+        licensing["verify_runtime"](runtime, repository_root=REPOSITORY_ROOT)
+    staged_notice.write_bytes(approved_notice)
+
+    (runtime / "Hesiva").write_bytes(b"different executable")
+    with pytest.raises(licensing["LicenseInventoryError"], match="different runtime payload"):
+        licensing["verify_runtime"](runtime, repository_root=REPOSITORY_ROOT)
+
+
+def test_runtime_legal_staging_rejects_forbidden_qt_component(
+    tmp_path: Path,
+) -> None:
+    licensing = _load_license_inventory()
+    runtime = tmp_path / "Hesiva"
+    forbidden = runtime / "_internal/PySide6/Qt/lib/libQt6VirtualKeyboard.so.6"
+    forbidden.parent.mkdir(parents=True)
+    forbidden.write_bytes(b"forbidden")
+    toc = tmp_path / "COLLECT-00.toc"
+    toc.write_text("([], )\n", encoding="utf-8")
+
+    with pytest.raises(licensing["LicenseInventoryError"], match="Forbidden GPL-only"):
+        licensing["stage_linux_runtime"](
+            runtime,
+            toc,
+            repository_root=REPOSITORY_ROOT,
+        )
+
+
+def test_lgpl_source_companion_is_exact_and_fail_closed(tmp_path: Path) -> None:
+    licensing = _load_license_inventory()
+    repository = tmp_path / "repository"
+    (repository / "packaging").mkdir(parents=True)
+    (repository / "RELINKING.md").write_bytes(b"Synthetic relinking instructions\n")
+    source_payload = b"official synthetic source archive"
+    requirements = {
+        "application_version": "0.1.0",
+        "format_version": 1,
+        "qt_version": "6.11.1",
+        "required_archives": [
+            {
+                "filename": "qtbase-everywhere-src-6.11.1.tar.xz",
+                "sha256": hashlib.sha256(source_payload).hexdigest(),
+                "size": len(source_payload),
+                "url": "https://download.qt.io/official_releases/example",
+            }
+        ],
+    }
+    requirements_path = repository / "packaging/lgpl-source-requirements.json"
+    requirements_path.write_text(json.dumps(requirements), encoding="utf-8")
+    release = tmp_path / "release"
+    release.mkdir()
+    archive = release / "hesiva-0.1.0-lgpl-corresponding-source.tar.xz"
+    source_directory = tmp_path / "sources"
+    source_directory.mkdir()
+    source_file = source_directory / "qtbase-everywhere-src-6.11.1.tar.xz"
+    source_file.write_bytes(source_payload)
+    assert (
+        licensing["build_source_bundle"](
+            source_directory,
+            release,
+            repository_root=repository,
+        )
+        == archive
+    )
+
+    assert (
+        licensing["verify_source_bundle"](
+            release,
+            repository_root=repository,
+        )
+        == archive
+    )
+
+    source_file.write_bytes(b"changed source")
+    with pytest.raises(licensing["LicenseInventoryError"], match="does not match Qt metadata"):
+        licensing["build_source_bundle"](
+            source_directory,
+            release,
+            repository_root=repository,
+        )
+    assert licensing["verify_source_bundle"](release, repository_root=repository) == archive
+
+
 @pytest.mark.parametrize("size", [16, 32, 48, 64, 128, 256, 512])
 def test_master_and_generated_icons_have_expected_size_and_transparency(size: int) -> None:
     master = QImage(str(REPOSITORY_ROOT / "assets/hesiva-icon.png"))
@@ -254,6 +437,11 @@ def test_debian_metadata_and_build_layout_are_authoritative() -> None:
         "usr/share/applications/hesiva.desktop",
         "usr/share/icons/",
         "usr/share/doc/hesiva/LICENSE",
+        "usr/share/doc/hesiva/THIRD_PARTY_NOTICES.md",
+        "usr/share/doc/hesiva/SOURCE-OFFER.md",
+        "usr/share/doc/hesiva/RELINKING.md",
+        "usr/share/doc/hesiva/licenses",
+        "usr/share/doc/hesiva/third-party-runtime-inventory.json",
         "usr/share/doc/hesiva/runtime-dependencies.txt",
     ):
         assert installed_path in build_script
@@ -278,6 +466,17 @@ def _create_provenance_fixture(repository_root: Path) -> None:
         "# dependency audit\n",
         encoding="utf-8",
     )
+    (repository_root / "packaging/license_inventory.py").write_text(
+        "# license audit\n",
+        encoding="utf-8",
+    )
+    (repository_root / "packaging/license-policy.json").write_text("{}\n", encoding="utf-8")
+    (repository_root / "packaging/lgpl-source-requirements.json").write_text(
+        "{}\n", encoding="utf-8"
+    )
+    (repository_root / "packaging/native-license-approvals.json").write_text(
+        "{}\n", encoding="utf-8"
+    )
     (repository_root / "packaging/icons/hicolor/16x16/apps").mkdir(parents=True)
     (repository_root / "packaging/icons/hesiva.ico").write_bytes(b"synthetic-windows-icon")
     (repository_root / "packaging/icons/hicolor/16x16/apps/hesiva.png").write_bytes(
@@ -291,6 +490,11 @@ def _create_provenance_fixture(repository_root: Path) -> None:
         encoding="utf-8",
     )
     (repository_root / "LICENSE").write_text("Synthetic fixture license\n", encoding="utf-8")
+    (repository_root / "THIRD_PARTY_NOTICES.md").write_text("Notices\n", encoding="utf-8")
+    (repository_root / "SOURCE-OFFER.md").write_text("Sources\n", encoding="utf-8")
+    (repository_root / "RELINKING.md").write_text("Relinking\n", encoding="utf-8")
+    (repository_root / "licenses").mkdir()
+    (repository_root / "licenses/example.txt").write_text("Example\n", encoding="utf-8")
     (repository_root / "pyproject.toml").write_text(
         '[project]\nname = "hesiva"\nversion = "0.1.0"\n',
         encoding="utf-8",
@@ -327,6 +531,8 @@ def test_frozen_artifact_provenance_rejects_source_and_runtime_drift(tmp_path: P
             repository_root / "packaging/icons/hicolor/16x16/apps/hesiva.png",
             b"changed-linux-icon",
         ),
+        (repository_root / "licenses/example.txt", b"changed-legal-corpus"),
+        (repository_root / "THIRD_PARTY_NOTICES.md", b"changed-notices"),
     )
     for icon_path, changed_content in icon_mutations:
         original_content = icon_path.read_bytes()
@@ -435,6 +641,15 @@ def test_release_scripts_require_and_preserve_verified_artifact_provenance() -> 
         "-m PyInstaller"
     )
     assert linux_build.index("-m PyInstaller") < linux_build.index("artifact_provenance.py record")
+    assert linux_build.index("-m PyInstaller") < linux_build.index(
+        "license_inventory.py stage-linux"
+    )
+    assert linux_build.index("license_inventory.py stage-linux") < linux_build.index(
+        "artifact_provenance.py record"
+    )
+    assert linux_build.index("license_inventory.py verify-source-bundle") < linux_build.index(
+        "artifact_provenance.py record"
+    )
     assert linux_build.index("-m PyInstaller") < linux_build.index("linux_runtime_audit.py verify")
     assert linux_build.index("linux_runtime_audit.py verify") < linux_build.index(
         "artifact_provenance.py record"
@@ -451,9 +666,12 @@ def test_release_scripts_require_and_preserve_verified_artifact_provenance() -> 
     )
     assert first_verification < runtime_copy < staged_verification
     assert "linux_runtime_audit.py debian-depends" in debian_build
+    assert "license_inventory.py verify-runtime" in debian_build
+    assert "license_inventory.py verify-source-bundle" in debian_build
     assert "s/@DEPENDS@/$dependency_list/g" in debian_build
     assert 'if [[ ! -x "$runtime_source/Hesiva"' not in debian_build
     assert smoke.count("artifact_provenance.py verify") == 2
+    assert smoke.count("license_inventory.py verify-runtime") == 2
     assert "linux_runtime_audit.py verify" in smoke
     assert 'smoke_platform="${HESIVA_SMOKE_QPA_PLATFORM:-offscreen}"' in smoke
     assert "offscreen|xcb|wayland" in smoke

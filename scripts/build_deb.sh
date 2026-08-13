@@ -42,6 +42,10 @@ fi
 runtime_source="$repository_root/dist/Hesiva"
 "$hesiva_python" packaging/artifact_provenance.py verify
 "$hesiva_python" packaging/linux_runtime_audit.py verify --runtime "$runtime_source"
+"$hesiva_python" packaging/license_inventory.py verify-runtime --runtime "$runtime_source"
+"$hesiva_python" packaging/license_inventory.py verify-source-bundle \
+    --release-directory "$repository_root/dist" \
+    --runtime "$runtime_source"
 dependency_list="$(
     "$hesiva_python" packaging/linux_runtime_audit.py debian-depends \
         --runtime "$runtime_source"
@@ -76,6 +80,14 @@ install -m 755 packaging/linux/hesiva "$package_root/usr/bin/hesiva"
 install -m 644 packaging/linux/hesiva.desktop \
     "$package_root/usr/share/applications/hesiva.desktop"
 install -m 644 LICENSE "$package_root/usr/share/doc/hesiva/LICENSE"
+install -m 644 THIRD_PARTY_NOTICES.md \
+    "$package_root/usr/share/doc/hesiva/THIRD_PARTY_NOTICES.md"
+install -m 644 SOURCE-OFFER.md "$package_root/usr/share/doc/hesiva/SOURCE-OFFER.md"
+install -m 644 RELINKING.md "$package_root/usr/share/doc/hesiva/RELINKING.md"
+cp -a licenses "$package_root/usr/share/doc/hesiva/licenses"
+install -m 644 \
+    "$runtime_source/third-party-runtime-inventory.json" \
+    "$package_root/usr/share/doc/hesiva/third-party-runtime-inventory.json"
 "$hesiva_python" packaging/linux_runtime_audit.py report \
     --runtime "$runtime_source" >"$package_root/usr/share/doc/hesiva/runtime-dependencies.txt"
 

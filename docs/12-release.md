@@ -75,9 +75,11 @@ publisher, support URL, or website.
 
 MIT describes Hesiva's own source, not the complete frozen distribution. The authoritative
 third-party component, LGPL and release-notice audit is `docs/13-third-party-licensing.md`. A release
-artifact must contain Hesiva's `LICENSE`, `THIRD_PARTY_NOTICES.md`, the exact authoritative license
-corpus, and the reviewed Qt/PySide/Shiboken corresponding-source/source-offer and relinking
-information. The current artifact does not yet meet that requirement and is not distributable.
+artifact must contain Hesiva's `LICENSE`, `THIRD_PARTY_NOTICES.md`, `SOURCE-OFFER.md`,
+`RELINKING.md`, the exact authoritative `licenses/` corpus and a payload-bound
+`third-party-runtime-inventory.json`. These repository inputs now exist, but the current stale
+artifact must be rebuilt on Mint/Noble and accompanied by the verified corresponding-source bundle
+before distribution.
 
 ## Linux Build
 
@@ -111,9 +113,12 @@ dist/Hesiva/_internal/
 
 Immediately before PyInstaller starts, the build helper records a SHA-256 digest over the complete
 production source/resource/spec input set and invalidates any prior provenance record. After the
-build, it accepts the output only if those inputs are unchanged, then records both that source
+build, the legal-inventory gate verifies exact dependency versions, stages the corpus, captures
+Debian copyright metadata for every build-host native file, and binds that inventory to the frozen
+payload. It accepts the output only if those inputs are unchanged, then records both that source
 digest and a digest covering every runtime file, mode, and symbolic-link target in
-`dist/Hesiva.provenance.json`. This ignored build artifact is integrity/provenance metadata, not a
+`dist/Hesiva.provenance.json`. Legal texts, policy, inventory tooling and source requirements are
+included in the source digest. This ignored build artifact is integrity/provenance metadata, not a
 signature. Release staging and smoke validation reject a missing record, source drift, or runtime
 drift; they therefore cannot silently reuse an old `dist/Hesiva` after the repository changes.
 
@@ -126,6 +131,23 @@ scripts/build_linux.sh --build-only
 Build outputs are ignored by Git. Cleaning `build/` and `dist/` is safe only when they are confirmed
 to be this repository's generated build roots; a new PyInstaller `--clean` build recreates the
 needed content.
+
+The normal Linux release build must run on the documented Debian-family baseline with
+`dpkg-query`; a non-Debian host cannot authoritatively generate the Debian native-license mapping
+and fails closed. The first fresh build records the native package set and stops until
+`packaging/native-license-approvals.json` contains the reviewed exact versions; native source
+archives required by that review become part of the companion. Before `scripts/build_deb.sh`, place the exact source companion and its checksum
+beside the binary artifacts in `dist/` as specified by `SOURCE-OFFER.md`. The Debian build verifies
+the runtime inventory and source companion before staging.
+
+The companion is assembled from pre-downloaded official Qt archives with:
+
+```bash
+python packaging/license_inventory.py build-source-bundle \
+    --source-directory /absolute/path/to/downloaded-official-sources \
+    --release-directory dist \
+    --runtime dist/Hesiva
+```
 
 ## Packaged Smoke
 

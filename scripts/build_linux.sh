@@ -25,10 +25,17 @@ if [[ "$build_only" == false ]]; then
     git diff --check
 fi
 
+"$hesiva_python" packaging/license_inventory.py verify-policy
+
 "$hesiva_python" packaging/artifact_provenance.py invalidate
 source_digest="$("$hesiva_python" packaging/artifact_provenance.py source-digest)"
 "$hesiva_python" -m PyInstaller --clean --noconfirm packaging/Hesiva.spec
+"$hesiva_python" packaging/license_inventory.py stage-linux
 "$hesiva_python" packaging/linux_runtime_audit.py verify
+"$hesiva_python" packaging/license_inventory.py verify-runtime
+"$hesiva_python" packaging/license_inventory.py verify-source-bundle \
+    --release-directory "$repository_root/dist" \
+    --runtime "$repository_root/dist/Hesiva"
 "$hesiva_python" packaging/artifact_provenance.py record \
     --expected-source-sha256 "$source_digest"
 "$hesiva_python" packaging/artifact_provenance.py verify

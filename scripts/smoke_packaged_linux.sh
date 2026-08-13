@@ -24,6 +24,7 @@ if [[ ! -x "$release_executable" ]]; then
 fi
 "$hesiva_python" packaging/artifact_provenance.py verify
 "$hesiva_python" packaging/linux_runtime_audit.py verify
+"$hesiva_python" packaging/license_inventory.py verify-runtime
 
 smoke_root="$(mktemp -d /tmp/hesiva-packaged-smoke.XXXXXX)"
 chmod 700 "$smoke_root"
@@ -124,6 +125,7 @@ if [[ "$before_digest" != "$after_digest" ]]; then
     exit 1
 fi
 "$hesiva_python" packaging/artifact_provenance.py verify
+"$hesiva_python" packaging/license_inventory.py verify-runtime
 if find dist/Hesiva -type f \
     \( -name '*.db' -o -name 'config.json' -o -name '*.exa' -o -name 'Frm1.edb' \) \
     | grep -q .; then

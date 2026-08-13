@@ -6,15 +6,16 @@ This is the engineering compliance record for the Hesiva 0.1.0 release candidate
 advice. Hesiva's own source remains MIT licensed; every redistributed third-party component remains
 under its own license.
 
-The reference inventory below was produced on 2026-08-13 from a provenance-verified PyInstaller
-6.22.0 `onedir` build on openSUSE x86_64, Python 3.13.14, glibc 2.43, PySide6/Qt 6.11.1. The tree
-contained 381 regular files and occupied 199,460,644 bytes. This is useful evidence, but it is not
-the Linux release candidate: the final artifact must be rebuilt on the selected Debian-family
-baseline and inventoried again. Windows requires its own native inventory.
+The exact-version repository corpus is now `THIRD_PARTY_NOTICES.md`, `SOURCE-OFFER.md`,
+`RELINKING.md`, and `licenses/`. `packaging/license-policy.json` locks the Python/Qt/PyInstaller
+versions whose notices were reviewed. `packaging/license_inventory.py` rejects version drift,
+stages the corpus, maps every native file copied from the Debian-family build host to authoritative
+Debian copyright metadata, and binds the resulting inventory to the frozen payload digest.
 
-The reference artifact does **not** contain a complete license/notice/source-offer payload and must
-not be distributed. A partial notice file would create false assurance, so one is not committed by
-this audit.
+The last Mint-built artifact predates this corpus and now correctly fails current source
+provenance. It remains dependency evidence only. A fresh artifact must be built on the selected
+Debian-family baseline so the exact native copyright corpus and runtime inventory can be
+regenerated. Windows requires a separate native inventory.
 
 ## Python component inventory
 
@@ -41,9 +42,9 @@ the following runtime components in the reference artifact:
 | PyInstaller bootloader/runtime hooks | 6.22.0 | bootloader/hooks bundled | GPL-2.0-or-later with bootloader exception; runtime hooks Apache-2.0 |
 
 The frozen setuptools vendor paths observed include importlib_metadata, zipp, more-itertools,
-jaraco helpers, backports.tarfile, packaging, platformdirs, tomli and wheel. Their exact license
-files must be copied from the exact installed release used to build, rather than inferred from this
-list.
+jaraco helpers, backports.tarfile, packaging, platformdirs, tomli and wheel. Their exact installed
+license files are preserved under `licenses/Python-packages/setuptools-vendored/`; the release
+version check prevents silently reusing them after an upgrade.
 
 PyInstaller, pyinstaller-hooks-contrib and build tooling are otherwise build-time dependencies.
 pytest, Ruff, iniconfig, pluggy, the test suite, fixtures and documentation are not frozen runtime
@@ -94,10 +95,11 @@ absent. No GPL-only Qt module was found in the resulting reference runtime. Qt P
 under an LGPL-compatible Qt license, but carries substantial third-party notices through PDFium,
 Chromium-derived code, FreeType, ICU, JPEG/PNG and related libraries.
 
-The authoritative Qt 6.11.1 third-party-code report also identifies notices/licenses used by GUI,
-image formats, network, PDF, Wayland and other shipped modules. Those notices are part of the
-required final inventory; the PySide wheel installed on this host does not itself contain a
-complete license/SBOM payload.
+The authoritative Qt 6.11.1 third-party-code report identifies notices/licenses used by Core,
+D-Bus, GUI, image formats, network, PDF, SVG and Wayland. The official module-level pages are
+preserved verbatim under `licenses/Qt-6.11.1/third-party/`. This is intentionally a conservative
+module-level corpus because the official PySide wheel does not contain a finer binary-level SBOM.
+The excluded TIFF notice is not included.
 
 ## LGPL redistribution requirements
 
@@ -143,27 +145,62 @@ Every portable Linux and Windows `onedir` must place the following at its visibl
 ```text
 LICENSE                         Hesiva MIT license
 THIRD_PARTY_NOTICES.md          exact component/version/source/notice index
+SOURCE-OFFER.md                 corresponding-source delivery mechanism
+RELINKING.md                    LGPL replacement/relinking information
 licenses/
-    LGPL-3.0.txt
-    Qt-PySide-Shiboken-6.11.1/  authoritative Qt for Python/Qt notices
-    Qt-6.11.1-third-party/      exact module/plugin notices or generated SPDX SBOM material
-    Python-3.13.14-LICENSE.txt
-    PyInstaller-6.22.0-COPYING.txt
+    Qt-6.11.1/                  LGPL/GPL texts and official Qt module notices
+    CPython-3.13.14/            exact CPython license
+    PyInstaller-6.22.0/         exact PyInstaller COPYING and exception
     Python-packages/            exact installed license files listed above
-    Native-libraries/           licenses/notices for every native library actually copied
-    SOURCE-OFFER.md             reviewed LGPL source/relinking instructions
+    Native-Debian/              build-derived Debian copyright files
+third-party-runtime-inventory.json
 ```
 
 Names may be normalized, but content must be verbatim from the authoritative exact-version upstream
 source/wheel/package. `THIRD_PARTY_NOTICES.md` is an index, not a substitute for required full
 license texts.
 
-The Debian package must install the same material under `/usr/share/doc/hesiva/` (using a Debian
-`copyright` file if desired) and should also keep the portable top-level material in `/opt/hesiva`
-so the onedir remains self-describing. The current Debian staging installs only Hesiva's MIT
-`LICENSE`; it is therefore not redistributable yet. The Windows onedir requires the same material.
+The Debian package installs the same material under `/usr/share/doc/hesiva/` and also retains it at
+the `/opt/hesiva` onedir root. The Windows onedir requires the platform-independent corpus plus a
+new inventory/license mapping for the actual Windows DLL/PYD payload.
 Microsoft runtime-library redistribution, if the native build copies it, must be checked against the
 applicable Visual C++ Redistributable terms on the actual Windows builder.
+
+## Corresponding source and relinking gate
+
+The selected mechanism is side-by-side delivery of
+`hesiva-0.1.0-lgpl-corresponding-source.tar.xz` and its SHA-256 sidecar, not a promise to deliver
+source later. `packaging/lgpl-source-requirements.json` records official Qt download URLs, exact
+sizes and authoritative SHA-256 values for Qt Base, Image Formats, SVG, Translations, Wayland,
+WebEngine (which contains Qt PDF/PDFium), and PySide setup 6.11.1. The package build refuses to
+proceed until `packaging/license_inventory.py verify-source-bundle` validates every member.
+The fresh build also generates the exact Debian-native package set. Every package must have a
+reviewed entry in `packaging/native-license-approvals.json`; if its review requires corresponding
+source, the exact approved native source archive is added under `native-sources/` and checked by
+the same source-bundle gate. The committed approval list is intentionally empty until the fresh
+Mint inventory exists, so it cannot bless an inferred native set.
+
+`RELINKING.md` documents the replaceable Linux onedir library/plugin layout and the equivalent
+Windows principle. Artifact provenance identifies an official build during production/staging; it
+is not checked at application runtime and does not prohibit a recipient from installing compatible
+modified LGPL libraries. Hesiva adds no reverse-engineering restriction for debugging those
+modifications. Counsel must still review the final distribution placement and legal wording.
+
+Prepare the source companion in a private release workspace by downloading each exact URL in
+`packaging/lgpl-source-requirements.json`, then run:
+
+```bash
+python packaging/license_inventory.py build-source-bundle \
+    --source-directory /absolute/path/to/downloaded-official-sources \
+    --release-directory dist \
+    --runtime dist/Hesiva
+python packaging/license_inventory.py verify-source-bundle \
+    --release-directory dist --runtime dist/Hesiva
+```
+
+The builder checks every official archive's recorded size and SHA-256, produces deterministic tar
+metadata, writes the checksum sidecar, and reopens/verifies the finished companion. It does not
+download sources or treat a filename as proof of identity.
 
 ## Linux native-library reference inventory
 
@@ -308,19 +345,21 @@ clean Windows 11 VM. Linux evidence does not establish Windows dependency closur
 
 ## Release blockers and legal review
 
-The following block distribution of V1 artifacts:
+The following still block distribution of V1 artifacts:
 
-1. the complete exact-version `THIRD_PARTY_NOTICES.md`, verbatim license corpus and Qt third-party
-   notices are not yet assembled into the artifact;
-2. an approved LGPL corresponding-source/source-offer and relinking-information mechanism is not
-   yet packaged;
-3. the generated Debian dependency list still needs one post-change Mint build/install confirmation;
-4. Windows native contents/dependencies and Microsoft runtime terms have not been inspected;
-5. the release build environment is not locked to an exact resolved dependency set, so a later
-   rebuild can silently require a different license corpus unless the environment is locked or the
-   inventory/notices are regenerated and compared for every build.
+1. a fresh Mint/Noble build must regenerate the exact Debian native copyright inventory, after
+   which every exact package/version/license/source obligation must be reviewed and recorded;
+2. the official source archives must be downloaded, verified, assembled into the exact companion
+   source archive, and published alongside the binary; this large bundle is intentionally not
+   committed to Git;
+3. human/legal review must approve the final corpus, source placement and distribution terms;
+4. Windows native contents/dependencies and Microsoft runtime terms have not been inspected.
 
-Human/legal review is needed for the LGPL source-offer duration/delivery wording, end-user terms
+The release build rejects any drift from the exact Python/Qt/PyInstaller versions in
+`packaging/license-policy.json`; an intentional upgrade requires updating and re-reviewing the
+corpus. This is a release inventory lock, not a general dependency resolver.
+
+Human/legal review is needed for the side-by-side source placement/delivery wording, end-user terms
 (especially reverse-engineering rights), and the final notice corpus. The technical conclusion is
 not that Hesiva is “legally safe”; it is that MIT licensing of Hesiva's code is compatible with the
 planned separate LGPL/permissive components if all applicable obligations are actually satisfied.
