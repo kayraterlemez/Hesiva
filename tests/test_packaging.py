@@ -234,6 +234,106 @@ def test_license_policy_rejects_dependency_version_drift(
         licensing["verify_build_environment"]()
 
 
+@pytest.mark.parametrize("under_internal", [False, True])
+def test_collect_destination_resolves_supported_onedir_layouts(
+    tmp_path: Path,
+    under_internal: bool,
+) -> None:
+    licensing = _load_license_inventory()
+    runtime = tmp_path / "Hesiva"
+    destination = Path("PySide6/Qt/lib/libQt6Core.so.6")
+    expected = runtime / destination
+    if under_internal:
+        expected = runtime / "_internal" / destination
+    expected.parent.mkdir(parents=True)
+    expected.write_bytes(b"synthetic Qt library")
+
+    resolved = licensing["_resolve_collect_destination"](runtime, destination.as_posix())
+
+    assert resolved == expected
+
+
+def test_collect_destination_rejects_ambiguous_onedir_layout(tmp_path: Path) -> None:
+    licensing = _load_license_inventory()
+    runtime = tmp_path / "Hesiva"
+    destination = Path("PySide6/Qt/lib/libQt6Core.so.6")
+    root_entry = runtime / destination
+    internal_entry = runtime / "_internal" / destination
+    root_entry.parent.mkdir(parents=True)
+    internal_entry.parent.mkdir(parents=True)
+    root_entry.write_bytes(b"root")
+    internal_entry.write_bytes(b"internal")
+
+    with pytest.raises(licensing["LicenseInventoryError"], match="entry is ambiguous"):
+        licensing["_resolve_collect_destination"](runtime, destination.as_posix())
+
+
+def test_collect_destination_preserves_absent_entry_error(tmp_path: Path) -> None:
+    licensing = _load_license_inventory()
+    runtime = tmp_path / "Hesiva"
+    runtime.mkdir()
+    destination = "PySide6/Qt/lib/libQt6Core.so.6"
+
+    with pytest.raises(
+        licensing["LicenseInventoryError"],
+        match=f"entry is absent from frozen runtime: {destination}",
+    ):
+        licensing["_resolve_collect_destination"](runtime, destination)
+
+
+def test_collect_destination_preserves_dangling_symlink_entries(tmp_path: Path) -> None:
+    licensing = _load_license_inventory()
+    runtime = tmp_path / "Hesiva"
+    entry = runtime / "_internal/libQt6Core.so.6"
+    entry.parent.mkdir(parents=True)
+    entry.symlink_to("PySide6/Qt/lib/libQt6Core.so.6")
+
+    resolved = licensing["_resolve_collect_destination"](runtime, "libQt6Core.so.6")
+
+    assert resolved == entry
+    assert resolved.is_symlink()
+
+
+def test_native_inventory_records_resolved_internal_runtime_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    licensing = _load_license_inventory()
+    runtime = tmp_path / "Hesiva"
+    runtime_entry = runtime / "_internal/libnative.so.1"
+    runtime_entry.parent.mkdir(parents=True)
+    runtime_entry.write_bytes(b"native")
+    source = tmp_path / "host/libnative.so.1"
+    source.parent.mkdir()
+    source.write_bytes(b"host native")
+    copyright_file = tmp_path / "copyright"
+    copyright_file.write_text("Synthetic copyright\n", encoding="utf-8")
+    monkeypatch.setattr(
+        licensing["_native_debian_inventory"].__globals__["shutil"],
+        "which",
+        lambda _name: "/usr/bin/dpkg-query",
+    )
+    monkeypatch.setitem(
+        licensing["_native_debian_inventory"].__globals__,
+        "_debian_owner",
+        lambda _source: {
+            "binary_package": "libnative1:amd64",
+            "binary_version": "1.0-1",
+            "source_package": "native",
+            "source_version": "1.0-1",
+            "copyright_path": str(copyright_file),
+        },
+    )
+
+    packages, _copyright_files = licensing["_native_debian_inventory"](
+        [("libnative.so.1", str(source), "BINARY", runtime_entry)],
+        REPOSITORY_ROOT,
+        runtime,
+    )
+
+    assert packages[0]["runtime_entries"] == ["_internal/libnative.so.1"]
+
+
 def test_runtime_legal_inventory_is_tied_to_exact_frozen_payload(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -256,7 +356,7 @@ def test_runtime_legal_inventory_is_tied_to_exact_frozen_payload(
     monkeypatch.setitem(
         licensing["stage_linux_runtime"].__globals__,
         "_native_debian_inventory",
-        lambda _entries, _repository_root: (
+        lambda _entries, _repository_root, _runtime: (
             [native_record],
             {"libsynthetic1_amd64": copyright_file},
         ),

@@ -187,6 +187,20 @@ def _collect_entries(path: Path) -> list[tuple[str, str, str]]:
     return entries
 
 
+def _resolve_collect_destination(runtime: Path, destination: str) -> Path:
+    candidates = (runtime / destination, runtime / "_internal" / destination)
+    matches = [path for path in candidates if path.exists() or path.is_symlink()]
+    if len(matches) > 1:
+        raise LicenseInventoryError(
+            f"PyInstaller collection entry is ambiguous in frozen runtime: {destination}"
+        )
+    if not matches:
+        raise LicenseInventoryError(
+            f"PyInstaller collection entry is absent from frozen runtime: {destination}"
+        )
+    return matches[0]
+
+
 def _debian_owner(source_path: Path) -> dict[str, str]:
     search = subprocess.run(
         ["dpkg-query", "--search", str(source_path)],
@@ -232,7 +246,7 @@ def _debian_owner(source_path: Path) -> dict[str, str]:
 
 
 def _native_debian_inventory(
-    entries: list[tuple[str, str, str]], repository_root: Path
+    entries: list[tuple[str, str, str, Path]], repository_root: Path, runtime: Path
 ) -> tuple[list[dict[str, Any]], dict[str, Path]]:
     if shutil.which("dpkg-query") is None:
         raise LicenseInventoryError(
@@ -242,7 +256,7 @@ def _native_debian_inventory(
     environment_root = Path(sys.prefix).resolve()
     package_sources: dict[str, dict[str, Any]] = {}
     copyright_files: dict[str, Path] = {}
-    for destination, raw_source, entry_type in entries:
+    for _destination, raw_source, entry_type, runtime_path in entries:
         source = Path(raw_source)
         if entry_type == "SYMLINK" or not source.is_absolute():
             continue
@@ -262,7 +276,7 @@ def _native_debian_inventory(
             }
             | {"runtime_entries": []},
         )
-        record["runtime_entries"].append(destination)
+        record["runtime_entries"].append(runtime_path.relative_to(runtime).as_posix())
         copyright_files[package_name] = Path(owner["copyright_path"])
     if not package_sources:
         raise LicenseInventoryError("No Debian-owned bundled native files were identified.")
@@ -328,11 +342,9 @@ def stage_linux_runtime(
     """Stage a self-describing legal corpus from the exact Debian build inputs."""
     policy = verify_build_environment(repository_root)
     entries = _collect_entries(collect_toc)
-    for destination, _source, _entry_type in entries:
-        if not (runtime / destination).exists() and not (runtime / destination).is_symlink():
-            raise LicenseInventoryError(
-                f"PyInstaller collection entry is absent from frozen runtime: {destination}"
-            )
+    resolved_entries = [
+        (*entry, _resolve_collect_destination(runtime, entry[0])) for entry in entries
+    ]
     relative_runtime_files = {
         path.relative_to(runtime).as_posix().lower()
         for path in runtime.rglob("*")
@@ -345,7 +357,9 @@ def stage_linux_runtime(
     )
     if forbidden:
         raise LicenseInventoryError(f"Forbidden GPL-only/unused Qt payload: {forbidden[0]}")
-    native_packages, copyright_files = _native_debian_inventory(entries, repository_root)
+    native_packages, copyright_files = _native_debian_inventory(
+        resolved_entries, repository_root, runtime
+    )
     native_review_complete, native_approvals, approvals_digest = _native_approval_state(
         native_packages, repository_root
     )
