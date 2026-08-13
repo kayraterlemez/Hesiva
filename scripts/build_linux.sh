@@ -28,6 +28,7 @@ fi
 "$hesiva_python" packaging/artifact_provenance.py invalidate
 source_digest="$("$hesiva_python" packaging/artifact_provenance.py source-digest)"
 "$hesiva_python" -m PyInstaller --clean --noconfirm packaging/Hesiva.spec
+"$hesiva_python" packaging/linux_runtime_audit.py verify
 "$hesiva_python" packaging/artifact_provenance.py record \
     --expected-source-sha256 "$source_digest"
 "$hesiva_python" packaging/artifact_provenance.py verify

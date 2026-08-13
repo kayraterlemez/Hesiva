@@ -226,6 +226,7 @@ layout:
 /usr/share/applications/hesiva.desktop
 /usr/share/icons/hicolor/<size>x<size>/apps/hesiva.png
 /usr/share/doc/hesiva/LICENSE
+/usr/share/doc/hesiva/runtime-dependencies.txt
 ```
 
 On an amd64 build host with `dpkg-deb`, run:
@@ -234,19 +235,66 @@ On an amd64 build host with `dpkg-deb`, run:
 scripts/build_deb.sh
 ```
 
+The selected Ubuntu Noble/Linux Mint 22.3 build baseline must provide `readelf` (`binutils`),
+`dpkg-query`/`dpkg-deb` (`dpkg`), `libxcb-cursor.so.0` (`libxcb-cursor0`), and `libcups.so.2`
+(`libcups2t64`) before the frozen build. The last two libraries are explicit build inputs: the spec
+copies them into the onedir runtime and fails instead of silently producing an XCB- or
+printing-incomplete artifact when either is unavailable.
+
 The script obtains the version through `hesiva.version.get_application_version()`, requires the
 existing `onedir` tree to match both its recorded source and runtime digests, uses a private
 temporary package root, and writes `dist/hesiva_<version>_amd64.deb`. It verifies the copied
 `/opt/hesiva` tree again before publication, so a missing, stale, concurrently changed, or partially
 copied runtime fails closed with an instruction to rebuild rather than being silently packaged.
 Current control metadata uses package `hesiva`, architecture `amd64`, section `utils`, priority
-`optional`, the locked maintainer, and currently declares only `libc6`/`libgl1` runtime
-dependencies. That dependency declaration is not yet release-validated: inspection of the frozen
-Qt GUI/XCB libraries on the development host still shows external EGL, font, X11, xkbcommon, GLib,
-and XCB-family native requirements. Their authoritative Debian package mapping must be derived and
-tested on the selected clean release baseline before the `.deb` is distributable; PyInstaller
-bundling must not be treated as proof that these host libraries are present. The helper never
-installs build tools or the package automatically.
+`optional`, and the locked maintainer. `Depends` is not a static guessed list. The Linux runtime
+audit executes every ELF with the same `_internal` library search root used by the PyInstaller
+bootloader, rejects unresolved or unreviewed host SONAMEs, and maps only paths actually resolved
+outside `/opt/hesiva` to their installed Debian binary-package owners. The build writes that sorted,
+deduplicated direct package list into `DEBIAN/control`; Debian then manages those packages'
+transitive dependencies. The complete resolution record is installed as
+`runtime-dependencies.txt`.
+
+Generic `dpkg-shlibdeps` is not used for the complete onedir tree. It expects Debian source-package
+metadata and shlibs/symbols metadata for every private library, while bundled PySide Qt libraries
+such as `libQt6XcbQpa.so.6` intentionally have neither. Treating that expected failure as a warning
+would be unsafe. `packaging/linux_runtime_audit.py` instead uses `readelf` for each ELF's
+`DT_NEEDED`/RPATH/RUNPATH and `ldd` under the bootloader-equivalent search path, then uses
+`dpkg-query` only for resolved host paths. The helper never installs build tools or the package
+automatically.
+
+The reviewed split is deliberate:
+
+- Hesiva, CPython, PySide6/Shiboken, collected Qt libraries/plugins, ICU, and the PyInstaller-selected
+  Python/native closure are bundled under `/opt/hesiva`;
+- `libxcb-cursor.so.0` and `libcups.so.2` are additionally forced into that bundle because XCB
+  startup and native printing must not vary with incidental build-host discovery;
+- the XCB and Wayland platform plugins and the CUPS print-support plugin are required bundle
+  members;
+- glibc/the dynamic loader, base `libxcb`, Wayland client libraries, and the host GL/EGL/DRM driver
+  interface remain system-provided so the runtime integrates with the target operating system and
+  graphics stack;
+- TIFF, Qt Virtual Keyboard, the otherwise-unused QML/Quick cluster, GNU Readline, and development
+  or test tools are excluded.
+
+The audit's allowlist makes this policy fail closed: a new direct host SONAME requires an explicit
+review instead of silently changing `Depends`. Although `ldd` verifies the recursive closure, only
+host paths attached to direct `DT_NEEDED` edges of the bundled ELFs are mapped to Debian packages;
+this avoids declaring every transitive package manually.
+
+The default packaged smoke remains headless-safe. On a native desktop, use the same workflow with
+the real platform plugin instead of maintaining a second test script:
+
+```bash
+HESIVA_SMOKE_QPA_PLATFORM=xcb scripts/smoke_packaged_linux.sh
+# Run separately in an intended Wayland session:
+HESIVA_SMOKE_QPA_PLATFORM=wayland scripts/smoke_packaged_linux.sh
+```
+
+Each mode still verifies provenance, the full ELF closure, database initialization, the runtime
+workflow, and that the frozen tree is unchanged. The XCB/Wayland modes additionally require a live
+matching desktop session and exercise actual Qt platform-plugin initialization.
+
 When `dpkg-deb` is unavailable, `scripts/build_deb.sh --stage-only /absolute/new/directory` may be
 used to inspect the exact package root without fabricating a `.deb`; the destination must not exist.
 
@@ -262,7 +310,8 @@ launcher, desktop, icon, and license files only. It neither enumerates home dire
 `$XDG_DATA_HOME/hesiva` or `~/.local/share/hesiva`; reinstall and upgrade therefore preserve the
 user-owned database, configuration, and backups.
 
-This development host does not currently provide `dpkg-deb` or a disposable Debian install root.
+This development host does not currently provide `dpkg-deb`, `dpkg-query`, or a disposable Debian
+install root.
 Consequently the build helper and package-root mappings are reviewable and tested, while actual
 `.deb` construction, `dpkg-deb --info`/`--contents`, and isolated install/remove/reinstall remain a
 release-environment gate. No system package is installed automatically to bypass that gate.

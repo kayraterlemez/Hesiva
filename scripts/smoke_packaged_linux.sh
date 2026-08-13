@@ -6,6 +6,14 @@ cd "$repository_root"
 
 hesiva_python="${HESIVA_BUILD_PYTHON:-$repository_root/.venv/bin/python}"
 release_executable="$repository_root/dist/Hesiva/Hesiva"
+smoke_platform="${HESIVA_SMOKE_QPA_PLATFORM:-offscreen}"
+case "$smoke_platform" in
+    offscreen|xcb|wayland) ;;
+    *)
+        echo "Geçersiz Qt smoke platformu: $smoke_platform" >&2
+        exit 2
+        ;;
+esac
 if [[ ! -x "$hesiva_python" ]]; then
     echo "Build Python bulunamadı: $hesiva_python" >&2
     exit 1
@@ -15,6 +23,7 @@ if [[ ! -x "$release_executable" ]]; then
     exit 1
 fi
 "$hesiva_python" packaging/artifact_provenance.py verify
+"$hesiva_python" packaging/linux_runtime_audit.py verify
 
 smoke_root="$(mktemp -d /tmp/hesiva-packaged-smoke.XXXXXX)"
 chmod 700 "$smoke_root"
@@ -29,9 +38,9 @@ before_digest="$(find dist/Hesiva -type f -print0 | sort -z | xargs -0 sha256sum
 set +e
 (
     cd "$smoke_root/cwd"
-    HOME="$smoke_root/home" \
+        HOME="$smoke_root/home" \
         XDG_DATA_HOME="$smoke_root/launch-data" \
-        QT_QPA_PLATFORM=offscreen \
+        QT_QPA_PLATFORM="$smoke_platform" \
         QT_LOGGING_RULES='qt.qpa.backingstore=true' \
         timeout 3s "$release_executable" >"$smoke_root/launch.log" 2>&1
 )
@@ -104,7 +113,7 @@ PY
     cd "$smoke_root/cwd"
     HOME="$smoke_root/home" \
         XDG_DATA_HOME="$smoke_root/runtime-data" \
-        QT_QPA_PLATFORM=offscreen \
+        QT_QPA_PLATFORM="$smoke_platform" \
         "$repository_root/build/packaged-smoke-dist/HesivaRuntimeSmoke/HesivaRuntimeSmoke" \
         "$smoke_root/work"
 )
@@ -122,4 +131,4 @@ if find dist/Hesiva -type f \
     exit 1
 fi
 
-echo "Packaged Linux smoke completed without modifying dist/Hesiva."
+echo "Packaged Linux smoke ($smoke_platform) completed without modifying dist/Hesiva."

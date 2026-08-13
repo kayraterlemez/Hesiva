@@ -24,6 +24,7 @@ SOURCE_INPUTS = (
     Path("assets/hesiva-icon.png"),
     Path("packaging/Hesiva.spec"),
     Path("packaging/pyinstaller_support.py"),
+    Path("packaging/linux_runtime_audit.py"),
     Path("packaging/icons"),
     Path("packaging/linux"),
     Path("packaging/debian"),

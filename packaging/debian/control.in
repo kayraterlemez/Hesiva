@@ -4,7 +4,7 @@ Architecture: amd64
 Maintainer: Kayra Terlemez <kayraterlemez2@gmail.com>
 Section: utils
 Priority: optional
-Depends: libc6, libgl1
+Depends: @DEPENDS@
 Installed-Size: @INSTALLED_SIZE@
 Description: Offline-first veteriner müşteri hesap ve bakiye takip uygulaması
  Hesiva müşteri borç, ödeme, hayvan, hatırlatma ve raporlama

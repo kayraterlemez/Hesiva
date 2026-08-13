@@ -10,6 +10,7 @@ from pyinstaller_support import (
     SOURCE_ROOT,
     executable_icon,
     hesiva_datas,
+    required_linux_binaries,
     with_baseline_linux_libraries,
     without_unused_qt_plugins,
 )
@@ -18,7 +19,7 @@ from pyinstaller_support import (
 analysis = Analysis(
     [str(SOURCE_ROOT / "hesiva" / "__main__.py")],
     pathex=[str(SOURCE_ROOT)],
-    binaries=[],
+    binaries=required_linux_binaries(),
     datas=hesiva_datas(),
     hiddenimports=list(MIGRATION_HIDDEN_IMPORTS),
     hookspath=[],

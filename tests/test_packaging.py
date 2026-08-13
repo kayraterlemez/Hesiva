@@ -57,6 +57,25 @@ def test_build_metadata_matches_authoritative_project_version() -> None:
     assert support["verify_build_metadata"]() == get_application_version()
 
 
+def test_required_linux_release_libraries_are_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
+    support = runpy.run_path(str(REPOSITORY_ROOT / "packaging" / "pyinstaller_support.py"))
+    resolved = {
+        "libxcb-cursor.so.0": "/system/libxcb-cursor.so.0",
+        "libcups.so.2": "/system/libcups.so.2",
+    }
+    support["required_linux_binaries"].__globals__["resolve_library_path"] = resolved.get
+    monkeypatch.setattr(support["required_linux_binaries"].__globals__["sys"], "platform", "linux")
+
+    assert support["required_linux_binaries"]() == [
+        ("/system/libxcb-cursor.so.0", "."),
+        ("/system/libcups.so.2", "."),
+    ]
+
+    resolved.pop("libxcb-cursor.so.0")
+    with pytest.raises(RuntimeError, match="libxcb-cursor.so.0"):
+        support["required_linux_binaries"]()
+
+
 def test_unused_tiff_and_gpl_only_virtual_keyboard_payloads_are_filtered() -> None:
     support = runpy.run_path(str(REPOSITORY_ROOT / "packaging" / "pyinstaller_support.py"))
     entries = [
@@ -224,6 +243,7 @@ def test_debian_metadata_and_build_layout_are_authoritative() -> None:
     assert "Version: @VERSION@\n" in control
     assert "Architecture: amd64\n" in control
     assert "Maintainer: Kayra Terlemez <kayraterlemez2@gmail.com>\n" in control
+    assert "Depends: @DEPENDS@\n" in control
     assert "License:" not in control
     assert get_application_version() not in control
     assert "from hesiva.version import get_application_version" in build_script
@@ -234,6 +254,7 @@ def test_debian_metadata_and_build_layout_are_authoritative() -> None:
         "usr/share/applications/hesiva.desktop",
         "usr/share/icons/",
         "usr/share/doc/hesiva/LICENSE",
+        "usr/share/doc/hesiva/runtime-dependencies.txt",
     ):
         assert installed_path in build_script
     assert "postrm" not in build_script
@@ -251,6 +272,10 @@ def _create_provenance_fixture(repository_root: Path) -> None:
     (repository_root / "packaging/Hesiva.spec").write_text("# spec\n", encoding="utf-8")
     (repository_root / "packaging/pyinstaller_support.py").write_text(
         "# support\n",
+        encoding="utf-8",
+    )
+    (repository_root / "packaging/linux_runtime_audit.py").write_text(
+        "# dependency audit\n",
         encoding="utf-8",
     )
     (repository_root / "packaging/icons/hicolor/16x16/apps").mkdir(parents=True)
@@ -410,6 +435,10 @@ def test_release_scripts_require_and_preserve_verified_artifact_provenance() -> 
         "-m PyInstaller"
     )
     assert linux_build.index("-m PyInstaller") < linux_build.index("artifact_provenance.py record")
+    assert linux_build.index("-m PyInstaller") < linux_build.index("linux_runtime_audit.py verify")
+    assert linux_build.index("linux_runtime_audit.py verify") < linux_build.index(
+        "artifact_provenance.py record"
+    )
     assert linux_build.index("artifact_provenance.py record") < linux_build.index(
         "artifact_provenance.py verify"
     )
@@ -421,8 +450,14 @@ def test_release_scripts_require_and_preserve_verified_artifact_provenance() -> 
         first_verification + 1,
     )
     assert first_verification < runtime_copy < staged_verification
+    assert "linux_runtime_audit.py debian-depends" in debian_build
+    assert "s/@DEPENDS@/$dependency_list/g" in debian_build
     assert 'if [[ ! -x "$runtime_source/Hesiva"' not in debian_build
     assert smoke.count("artifact_provenance.py verify") == 2
+    assert "linux_runtime_audit.py verify" in smoke
+    assert 'smoke_platform="${HESIVA_SMOKE_QPA_PLATFORM:-offscreen}"' in smoke
+    assert "offscreen|xcb|wayland" in smoke
+    assert smoke.count('QT_QPA_PLATFORM="$smoke_platform"') == 2
     assert "QT_LOGGING_RULES='qt.qpa.backingstore=true'" in smoke
     assert "grep -q '^qt.qpa.backingstore:'" in smoke
     assert "Hesiva authenticated startup failed" in smoke
@@ -446,3 +481,197 @@ def test_packaging_sources_contain_no_developer_home_path() -> None:
     ]
 
     assert all("/home/hiw" not in path.read_text(encoding="utf-8") for path in text_files)
+
+
+def _load_runtime_audit() -> dict[str, object]:
+    return runpy.run_path(str(REPOSITORY_ROOT / "packaging/linux_runtime_audit.py"))
+
+
+def _create_runtime_policy_fixture(runtime: Path) -> None:
+    required = (
+        "Hesiva",
+        "_internal/libxcb-cursor.so.0",
+        "_internal/libcups.so.2",
+        "_internal/PySide6/Qt/plugins/platforms/libqxcb.so",
+        "_internal/PySide6/Qt/plugins/platforms/libqwayland.so",
+        "_internal/PySide6/Qt/plugins/printsupport/libcupsprintersupport.so",
+    )
+    for relative in required:
+        path = runtime / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"synthetic")
+
+
+def test_runtime_audit_models_pyinstaller_loader_resolution(tmp_path: Path) -> None:
+    audit = _load_runtime_audit()
+    runtime = tmp_path / "Hesiva"
+    bundled = runtime / "_internal/libxcb-cursor.so.0"
+    bundled.parent.mkdir(parents=True)
+    bundled.write_bytes(b"library")
+    host = tmp_path / "host/libGL.so.1"
+    host.parent.mkdir()
+    host.write_bytes(b"library")
+
+    resolutions = audit["_parse_ldd"](
+        f"""
+        linux-vdso.so.1 (0x0000)
+        libxcb-cursor.so.0 => {bundled} (0x0001)
+        libGL.so.1 => {host} (0x0002)
+        libmissing.so.1 => not found
+        /lib64/ld-linux-x86-64.so.2 (0x0003)
+        """,
+        runtime_root=runtime.resolve(),
+    )
+
+    assert [(item.soname, item.location) for item in resolutions] == [
+        ("libxcb-cursor.so.0", "bundled"),
+        ("libGL.so.1", "host"),
+        ("libmissing.so.1", "missing"),
+        ("ld-linux-x86-64.so.2", "host"),
+    ]
+
+
+def test_runtime_audit_rejects_unresolved_and_forbidden_components(
+    tmp_path: Path,
+) -> None:
+    audit = _load_runtime_audit()
+    runtime = tmp_path / "Hesiva"
+    _create_runtime_policy_fixture(runtime)
+    forbidden = runtime / "_internal/PySide6/Qt/lib/libQt6VirtualKeyboard.so.6"
+    forbidden.parent.mkdir(parents=True, exist_ok=True)
+    forbidden.write_bytes(b"forbidden")
+
+    with pytest.raises(audit["RuntimeAuditError"], match="Forbidden release component"):
+        audit["_validate_tree"](runtime)
+
+    forbidden.unlink()
+    audit["audit_runtime"].__globals__["_is_elf"] = lambda path: path.name == "Hesiva"
+    audit["audit_runtime"].__globals__["_inspect_dynamic_section"] = lambda _path: (
+        ("libmissing.so.1",),
+        (),
+        ("$ORIGIN/_internal",),
+    )
+    missing = audit["Resolution"]("libmissing.so.1", None, "missing")
+    audit["audit_runtime"].__globals__["_inspect_resolutions"] = lambda *_args, **_kwargs: (
+        missing,
+    )
+
+    with pytest.raises(audit["RuntimeAuditError"], match="unresolved ELF dependencies"):
+        audit["audit_runtime"](runtime)
+
+
+def test_runtime_audit_rejects_unreviewed_host_dependency(tmp_path: Path) -> None:
+    audit = _load_runtime_audit()
+    runtime = tmp_path / "Hesiva"
+    _create_runtime_policy_fixture(runtime)
+    audit["audit_runtime"].__globals__["_is_elf"] = lambda path: path.name == "Hesiva"
+    audit["audit_runtime"].__globals__["_inspect_dynamic_section"] = lambda _path: (
+        ("libxcb-cursor.so.0", "libcups.so.2", "libsurprise.so.1"),
+        (),
+        (),
+    )
+    audit["audit_runtime"].__globals__["_inspect_resolutions"] = lambda *_args, **_kwargs: (
+        audit["Resolution"](
+            "libxcb-cursor.so.0",
+            str((runtime / "_internal/libxcb-cursor.so.0").resolve()),
+            "bundled",
+        ),
+        audit["Resolution"](
+            "libcups.so.2",
+            str((runtime / "_internal/libcups.so.2").resolve()),
+            "bundled",
+        ),
+        audit["Resolution"]("libsurprise.so.1", "/system/libsurprise.so.1", "host"),
+    )
+
+    with pytest.raises(audit["RuntimeAuditError"], match="unreviewed host dependencies"):
+        audit["audit_runtime"](runtime)
+
+
+def test_runtime_report_uses_only_direct_needed_edges_for_host_dependencies(
+    tmp_path: Path,
+) -> None:
+    audit = _load_runtime_audit()
+    runtime = tmp_path / "Hesiva"
+    _create_runtime_policy_fixture(runtime)
+    audit["audit_runtime"].__globals__["_is_elf"] = lambda path: path.name == "Hesiva"
+    audit["audit_runtime"].__globals__["_inspect_dynamic_section"] = lambda _path: (
+        ("libxcb-cursor.so.0", "libcups.so.2", "libEGL.so.1"),
+        (),
+        (),
+    )
+    audit["audit_runtime"].__globals__["_inspect_resolutions"] = lambda *_args, **_kwargs: (
+        audit["Resolution"](
+            "libxcb-cursor.so.0",
+            str((runtime / "_internal/libxcb-cursor.so.0").resolve()),
+            "bundled",
+        ),
+        audit["Resolution"](
+            "libcups.so.2",
+            str((runtime / "_internal/libcups.so.2").resolve()),
+            "bundled",
+        ),
+        audit["Resolution"]("libEGL.so.1", "/system/libEGL.so.1", "host"),
+        # ldd includes this transitive dependency, but the current ELF does
+        # not have a direct DT_NEEDED edge to it.
+        audit["Resolution"]("libz.so.1", "/system/libz.so.1", "host"),
+    )
+
+    report = audit["audit_runtime"](runtime)
+
+    assert report.host_paths == (("libEGL.so.1", "/system/libEGL.so.1"),)
+    assert report.host_sonames == ("libEGL.so.1",)
+
+
+def test_debian_dependencies_are_direct_deduplicated_host_owners() -> None:
+    audit = _load_runtime_audit()
+    report = audit["RuntimeReport"](
+        runtime="/opt/hesiva",
+        elf_files=(),
+        bundled_sonames=(),
+        host_sonames=("libc.so.6", "libEGL.so.1"),
+        host_paths=(
+            ("libEGL.so.1", "/usr/lib/libEGL.so.1"),
+            ("libc.so.6", "/usr/lib/libc.so.6"),
+        ),
+    )
+    owners = {
+        "/usr/lib/libEGL.so.1": "libegl1",
+        "/usr/lib/libc.so.6": "libc6",
+    }
+    audit["debian_dependencies"].__globals__["_installed_debian_owner"] = owners.__getitem__
+    audit["debian_dependencies"].__globals__["shutil"].which = lambda _command: "/usr/bin/tool"
+
+    assert audit["debian_dependencies"](report) == ("libc6", "libegl1")
+
+
+def test_installed_dependency_report_does_not_embed_build_root(tmp_path: Path) -> None:
+    audit = _load_runtime_audit()
+    build_root = tmp_path / "private-developer-path" / "Hesiva"
+    report = audit["RuntimeReport"](
+        runtime=str(build_root),
+        elf_files=(
+            audit["ElfRecord"](
+                path="Hesiva",
+                needed=("libexample.so.1",),
+                rpath=(),
+                runpath=("$ORIGIN/_internal",),
+                resolutions=(
+                    audit["Resolution"](
+                        "libexample.so.1",
+                        str(build_root / "_internal/libexample.so.1"),
+                        "bundled",
+                    ),
+                ),
+            ),
+        ),
+        bundled_sonames=("libexample.so.1",),
+        host_sonames=(),
+        host_paths=(),
+    )
+
+    output = audit["_text_report"](report)
+
+    assert "runtime root: Hesiva (PyInstaller onedir)" in output
+    assert "<runtime>/_internal/libexample.so.1" in output
+    assert str(tmp_path) not in output

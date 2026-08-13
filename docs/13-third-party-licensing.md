@@ -223,51 +223,64 @@ dead payload on this host; this must be resolved on the Debian-family build, not
 
 ## Debian dependency closure
 
-`Depends: libc6, libgl1` is conclusively incomplete for the current reference artifact. Reading the
-`DT_NEEDED` entries of every ELF file and subtracting basenames actually present in the onedir leaves:
+The former static `Depends: libc6, libgl1` was conclusively incomplete. It has been replaced by an
+artifact-derived placeholder populated only on the Debian-family build host. The reference
+openSUSE artifact resolved these SONAMEs outside its onedir tree:
 
 ```text
-ld-linux-x86-64.so.2  libEGL.so.1       libGL.so.1       libbrotlicommon.so.1
-libbrotlidec.so.1     libbz2.so.1       libc.so.6        libcrypto.so.3
-libdl.so.2            libdrm.so.2       libhogweed.so.6  liblzma.so.5
-libm.so.6             libnettle.so.8    libpng16.so.16   libpthread.so.0
-libresolv.so.2        libsqlite3.so.0   libssl.so.3      libwayland-client.so.0
-libwayland-cursor.so.0 libwayland-egl.so.1 libxcb.so.1   libz.so.1
+ld-linux-x86-64.so.2   libEGL.so.1        libGL.so.1        libbrotlicommon.so.1
+libbrotlidec.so.1      libbz2.so.1        libc.so.6         libcrypto.so.3
+libdl.so.2             libdrm.so.2        libhogweed.so.6   liblzma.so.5
+libm.so.6              libnettle.so.8     libpng16.so.16    libpthread.so.0
+libresolv.so.2         libsqlite3.so.0    libssl.so.3       libwayland-client.so.0
+libwayland-cursor.so.0 libwayland-egl.so.1 libxcb.so.1      libz.so.1
 libzstd.so.1
 ```
 
-This proves missing EGL, DRM, Wayland, XCB, TLS/crypto, compression, PNG and SQLite families in
-addition to libc/GL. It does **not** prove final Debian package names: ABI transitions (for example
-`t64`) and the chosen baseline determine those names. Do not paste guessed package names into
-`control.in` on this openSUSE host.
+This proves direct host use of EGL, DRM, Wayland, XCB, TLS/crypto, compression, PNG and SQLite
+families in addition to libc/GL. It does **not** make them all manual package declarations: the
+release tool maps resolved paths to direct installed binary-package owners and deduplicates them;
+Debian resolves transitive dependencies normally.
+
+`dpkg-shlibdeps` is not an accurate whole-tree model for this PyInstaller layout. The original
+documented command first failed because `packaging/debian/control.in` is a binary control template,
+not a source+binary `debian/control`. With a synthetic source stanza it then failed because private
+bundled Qt libraries such as `libQt6XcbQpa.so.6` have no Debian shlibs/symbols metadata. Suppressing
+that error would risk classifying bundled libraries as missing host packages.
+
+`packaging/linux_runtime_audit.py` now provides the reproducible boundary. It records every ELF's
+`DT_NEEDED`, RPATH/RUNPATH and actual `ldd` resolution with `LD_LIBRARY_PATH` set exactly to the
+PyInstaller `_internal` root. It rejects unresolved libraries, runtime-escaping/dangling symlinks,
+forbidden payloads and any new host SONAME outside the reviewed policy. `libxcb-cursor.so.0` and
+`libcups.so.2` are explicitly required and resolved from the bundle so their presence cannot depend
+silently on build-host discovery. `debian-depends` maps only external resolved paths with
+`dpkg-query`, which naturally selects Noble's `t64` package names where applicable.
+
+For the locked Noble/Mint 22.3 baseline, install the dependency-audit tool and the two explicitly
+bundled build inputs before freezing:
+
+```bash
+sudo apt update
+sudo apt install binutils libxcb-cursor0 libcups2t64
+```
+
+`dpkg` supplies `dpkg-query` and `dpkg-deb` on this baseline. The audit verifies the recursive ELF
+closure, but the generated Debian `Depends` contains only owners of direct host `DT_NEEDED` edges;
+dependencies of those Debian packages remain Debian's responsibility.
 
 On the final Linux Mint/Ubuntu build machine:
 
 ```bash
 scripts/build_linux.sh
 scripts/smoke_packaged_linux.sh
-
-find dist/Hesiva -type f -print0 |
-  xargs -0 -n1 sh -c 'readelf -h "$1" >/dev/null 2>&1 && readelf -d "$1"' sh
-
-mkdir -p build/dependency-audit/debian
-sed -e 's/@VERSION@/0.1.0/g' -e 's/@INSTALLED_SIZE@/0/g' \
-  packaging/debian/control.in >build/dependency-audit/debian/control
-
-mapfile -d '' elf_files < <(find "$PWD/dist/Hesiva" -type f -print0)
-args=()
-for file in "${elf_files[@]}"; do
-    readelf -h "$file" >/dev/null 2>&1 && args+=("-e$file")
-done
-(cd build/dependency-audit && dpkg-shlibdeps -O \
-  -l"$PWD/../../dist/Hesiva/_internal" \
-  -l"$PWD/../../dist/Hesiva/_internal/PySide6/Qt/lib" \
-  "${args[@]}")
+HESIVA_SMOKE_QPA_PLATFORM=xcb scripts/smoke_packaged_linux.sh
+python packaging/linux_runtime_audit.py verify
+python packaging/linux_runtime_audit.py report
+python packaging/linux_runtime_audit.py debian-depends
+scripts/build_deb.sh
 ```
 
-Review `dpkg-shlibdeps` warnings rather than suppressing unresolved libraries. Map every copied
-native file to its source package/version/license, generate the complete notice payload, update
-`Depends` from the measured closure, rebuild, then verify:
+Inspect the generated dependency report and control metadata, then verify:
 
 ```bash
 scripts/build_deb.sh
@@ -301,8 +314,7 @@ The following block distribution of V1 artifacts:
    notices are not yet assembled into the artifact;
 2. an approved LGPL corresponding-source/source-offer and relinking-information mechanism is not
    yet packaged;
-3. Debian native dependency/package closure is not established on the intended baseline and the
-   current two-package `Depends` is incomplete;
+3. the generated Debian dependency list still needs one post-change Mint build/install confirmation;
 4. Windows native contents/dependencies and Microsoft runtime terms have not been inspected;
 5. the release build environment is not locked to an exact resolved dependency set, so a later
    rebuild can silently require a different license corpus unless the environment is locked or the

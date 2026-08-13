@@ -6,6 +6,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from PyInstaller.utils.hooks import copy_metadata
+from PyInstaller.depend.bindepend import resolve_library_path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOT = REPOSITORY_ROOT / "src"
@@ -14,6 +15,7 @@ MIGRATION_DESTINATION = "hesiva/database/migrations"
 APPLICATION_ICON_SOURCE = REPOSITORY_ROOT / "assets" / "hesiva-icon.png"
 APPLICATION_ICON_DESTINATION = "hesiva/assets"
 WINDOWS_ICON_SOURCE = REPOSITORY_ROOT / "packaging" / "icons" / "hesiva.ico"
+REQUIRED_LINUX_LIBRARIES = ("libxcb-cursor.so.0", "libcups.so.2")
 
 DEVELOPMENT_EXCLUDES = (
     "pytest",
@@ -51,6 +53,19 @@ def executable_icon() -> str | None:
     if not WINDOWS_ICON_SOURCE.is_file():
         raise RuntimeError(f"Windows icon is unavailable: {WINDOWS_ICON_SOURCE}")
     return str(WINDOWS_ICON_SOURCE)
+
+
+def required_linux_binaries() -> list[tuple[str, str]]:
+    """Require and explicitly bundle Linux clients needed by XCB and printing."""
+    if not sys.platform.startswith("linux"):
+        return []
+    binaries: list[tuple[str, str]] = []
+    for soname in REQUIRED_LINUX_LIBRARIES:
+        source = resolve_library_path(soname)
+        if source is None:
+            raise RuntimeError(f"Required Linux release library is unavailable: {soname}")
+        binaries.append((source, "."))
+    return binaries
 
 
 def verify_build_metadata() -> str:
