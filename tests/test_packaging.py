@@ -334,6 +334,75 @@ def test_native_inventory_records_resolved_internal_runtime_path(
     assert packages[0]["runtime_entries"] == ["_internal/libnative.so.1"]
 
 
+def test_native_debian_inventory_resolves_source_before_owner_lookup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    licensing = _load_license_inventory()
+
+    repository_root = tmp_path / "repository"
+    repository_root.mkdir()
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+
+    real_library = tmp_path / "usr/lib/libexample.so.1"
+    real_library.parent.mkdir(parents=True)
+    real_library.write_bytes(b"library")
+
+    symlink = tmp_path / "lib/libexample.so.1"
+    symlink.parent.mkdir(parents=True)
+    symlink.symlink_to(real_library)
+
+    runtime_library = runtime / "_internal/libexample.so.1"
+    runtime_library.parent.mkdir(parents=True)
+    runtime_library.write_bytes(b"bundled")
+
+    observed: list[Path] = []
+
+    def fake_owner(path: Path) -> dict[str, str]:
+        observed.append(path)
+        return {
+            "binary_package": "libexample1:amd64",
+            "binary_version": "1.0",
+            "source_package": "example",
+            "source_version": "1.0",
+            "copyright_path": str(tmp_path / "copyright"),
+        }
+
+    (tmp_path / "copyright").write_text("license", encoding="utf-8")
+
+    globals_ = licensing["_native_debian_inventory"].__globals__
+    monkeypatch.setitem(globals_, "_debian_owner", fake_owner)
+    monkeypatch.setattr(
+        globals_["shutil"],
+        "which",
+        lambda _name: "/usr/bin/dpkg-query",
+    )
+    monkeypatch.setattr(
+        globals_["sys"],
+        "prefix",
+        str(tmp_path / "venv"),
+    )
+
+    entries = [
+        (
+            "libexample.so.1",
+            str(symlink),
+            "BINARY",
+            runtime_library,
+        )
+    ]
+
+    licensing["_native_debian_inventory"](
+        entries,
+        repository_root,
+        runtime,
+    )
+
+    assert observed == [real_library.resolve()]
+
+
 def test_runtime_legal_inventory_is_tied_to_exact_frozen_payload(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

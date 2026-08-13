@@ -266,7 +266,7 @@ def _native_debian_inventory(
             for excluded_root in (root, environment_root)
         ):
             continue
-        owner = _debian_owner(source)
+        owner = _debian_owner(resolved_source)
         package_name = owner["binary_package"].replace(":", "_")
         record = package_sources.setdefault(
             package_name,
