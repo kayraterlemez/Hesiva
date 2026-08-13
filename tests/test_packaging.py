@@ -57,15 +57,59 @@ def test_build_metadata_matches_authoritative_project_version() -> None:
     assert support["verify_build_metadata"]() == get_application_version()
 
 
-def test_only_unavailable_unused_tiff_plugin_is_filtered() -> None:
+def test_unused_tiff_and_gpl_only_virtual_keyboard_payloads_are_filtered() -> None:
     support = runpy.run_path(str(REPOSITORY_ROOT / "packaging" / "pyinstaller_support.py"))
     entries = [
         ("PySide6/Qt/plugins/imageformats/libqtiff.so", "/host/libqtiff.so", "BINARY"),
+        (
+            "PySide6/Qt/plugins/platforminputcontexts/libqtvirtualkeyboardplugin.so",
+            "/wheel/libqtvirtualkeyboardplugin.so",
+            "BINARY",
+        ),
+        (
+            "PySide6/Qt/lib/libQt6VirtualKeyboard.so.6",
+            "/wheel/libQt6VirtualKeyboard.so.6",
+            "BINARY",
+        ),
+        (
+            "libQt6VirtualKeyboardQml.so.6",
+            "/wheel/libQt6VirtualKeyboardQml.so.6",
+            "SYMLINK",
+        ),
+        (
+            "PySide6/Qt/plugins/platforminputcontexts/qtvirtualkeyboardplugin.dll",
+            r"C:\\wheel\\qtvirtualkeyboardplugin.dll",
+            "BINARY",
+        ),
+        (
+            "PySide6/Qt/bin/Qt6VirtualKeyboard.dll",
+            r"C:\\wheel\\Qt6VirtualKeyboard.dll",
+            "BINARY",
+        ),
+        (
+            "PySide6/Qt/lib/libQt6Qml.so.6",
+            "/wheel/libQt6Qml.so.6",
+            "BINARY",
+        ),
+        ("Qt6Quick.dll", r"C:\\wheel\\Qt6Quick.dll", "BINARY"),
         ("PySide6/Qt/plugins/imageformats/libqjpeg.so", "/host/libqjpeg.so", "BINARY"),
         ("PySide6/Qt/plugins/platforms/libqxcb.so", "/host/libqxcb.so", "BINARY"),
     ]
 
-    assert support["without_unused_qt_plugins"](entries) == entries[1:]
+    assert support["without_unused_qt_plugins"](entries) == entries[-2:]
+
+
+def test_qt_filter_applies_to_binary_and_symlink_collections() -> None:
+    spec_text = (REPOSITORY_ROOT / "packaging" / "Hesiva.spec").read_text(encoding="utf-8")
+
+    assert "without_unused_qt_plugins(analysis.binaries)" in spec_text
+    assert "analysis.datas = without_unused_qt_plugins(analysis.datas)" in spec_text
+
+
+def test_windowed_build_excludes_optional_gpl_readline_runtime() -> None:
+    support = runpy.run_path(str(REPOSITORY_ROOT / "packaging" / "pyinstaller_support.py"))
+
+    assert "readline" in support["DEVELOPMENT_EXCLUDES"]
 
 
 def test_host_hwcaps_libraries_are_replaced_with_baseline_variants(tmp_path: Path) -> None:

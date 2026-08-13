@@ -35,8 +35,10 @@ The release artifact includes:
 
 It excludes tests, pytest, Ruff, Git data, caches, source documentation, synthetic legacy fixtures,
 and user/private data. The optional Qt TIFF image plugin is excluded because Hesiva does not load
-TIFF content and the development host does not provide its required ABI. Other Qt plugin families
-remain until clean-machine testing proves a narrower set safe.
+TIFF content and the development host does not provide its required ABI. The GPL-only Qt Virtual
+Keyboard module, its unused QML/Quick dependency cluster, and optional GNU Readline are excluded
+because the Widgets application uses none of them. Other Qt plugin families remain until
+clean-machine testing proves a narrower set safe.
 
 ## Version Contract
 
@@ -70,6 +72,12 @@ Master icon: assets/hesiva-icon.png
 `pyproject.toml` identifies the same SPDX license and includes `LICENSE` in distribution metadata.
 About uses the concise **MIT Lisansı** label; it does not duplicate the legal text or add a
 publisher, support URL, or website.
+
+MIT describes Hesiva's own source, not the complete frozen distribution. The authoritative
+third-party component, LGPL and release-notice audit is `docs/13-third-party-licensing.md`. A release
+artifact must contain Hesiva's `LICENSE`, `THIRD_PARTY_NOTICES.md`, the exact authoritative license
+corpus, and the reviewed Qt/PySide/Shiboken corresponding-source/source-offer and relinking
+information. The current artifact does not yet meet that requirement and is not distributable.
 
 ## Linux Build
 

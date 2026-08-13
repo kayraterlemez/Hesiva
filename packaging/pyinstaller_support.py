@@ -17,6 +17,9 @@ WINDOWS_ICON_SOURCE = REPOSITORY_ROOT / "packaging" / "icons" / "hesiva.ico"
 
 DEVELOPMENT_EXCLUDES = (
     "pytest",
+    # The windowed application has no interactive Python shell. Excluding the
+    # optional module also prevents bundling GNU Readline's GPL-only runtime.
+    "readline",
     "ruff",
     "tests",
 )
@@ -66,10 +69,51 @@ def verify_build_metadata() -> str:
 
 
 def without_unused_qt_plugins(entries: list[tuple[str, str, str]]) -> list[tuple[str, str, str]]:
-    """Exclude only the unused TIFF plugin whose host dependency is unavailable."""
-    excluded_suffix = "PySide6/Qt/plugins/imageformats/libqtiff.so"
+    """Exclude unused Qt payloads that are outside Hesiva's desktop runtime contract."""
+    excluded_suffixes = (
+        # Hesiva does not load TIFF content and the Linux build host does not
+        # provide the plugin's complete native dependency closure.
+        "PySide6/Qt/plugins/imageformats/libqtiff.so",
+        # Qt Virtual Keyboard is a GPL-only Qt module for open-source users.
+        # Hesiva is a conventional desktop Widgets application and neither
+        # imports this module nor provides an on-screen-keyboard workflow.
+        "PySide6/Qt/plugins/platforminputcontexts/libqtvirtualkeyboardplugin.so",
+        "PySide6/Qt/plugins/platforminputcontexts/qtvirtualkeyboardplugin.dll",
+        "PySide6/Qt/lib/libQt6VirtualKeyboard.so.6",
+        "PySide6/Qt/lib/libQt6VirtualKeyboardQml.so.6",
+        "PySide6/Qt/bin/Qt6VirtualKeyboard.dll",
+        "PySide6/Qt/bin/Qt6VirtualKeyboardQml.dll",
+        "libQt6VirtualKeyboard.so.6",
+        "libQt6VirtualKeyboardQml.so.6",
+        "Qt6VirtualKeyboard.dll",
+        "Qt6VirtualKeyboardQml.dll",
+        # These libraries are collected only as the virtual-keyboard
+        # dependency cluster in Hesiva's Qt Widgets/PDF/print build.
+        "PySide6/Qt/lib/libQt6Qml.so.6",
+        "PySide6/Qt/lib/libQt6QmlMeta.so.6",
+        "PySide6/Qt/lib/libQt6QmlModels.so.6",
+        "PySide6/Qt/lib/libQt6QmlWorkerScript.so.6",
+        "PySide6/Qt/lib/libQt6Quick.so.6",
+        "PySide6/Qt/bin/Qt6Qml.dll",
+        "PySide6/Qt/bin/Qt6QmlMeta.dll",
+        "PySide6/Qt/bin/Qt6QmlModels.dll",
+        "PySide6/Qt/bin/Qt6QmlWorkerScript.dll",
+        "PySide6/Qt/bin/Qt6Quick.dll",
+        "libQt6Qml.so.6",
+        "libQt6QmlMeta.so.6",
+        "libQt6QmlModels.so.6",
+        "libQt6QmlWorkerScript.so.6",
+        "libQt6Quick.so.6",
+        "Qt6Qml.dll",
+        "Qt6QmlMeta.dll",
+        "Qt6QmlModels.dll",
+        "Qt6QmlWorkerScript.dll",
+        "Qt6Quick.dll",
+    )
     return [
-        entry for entry in entries if not str(entry[0]).replace("\\", "/").endswith(excluded_suffix)
+        entry
+        for entry in entries
+        if not str(entry[0]).replace("\\", "/").endswith(excluded_suffixes)
     ]
 
 

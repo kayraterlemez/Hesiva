@@ -31,6 +31,7 @@ analysis = Analysis(
 analysis.binaries = with_baseline_linux_libraries(
     without_unused_qt_plugins(analysis.binaries)
 )
+analysis.datas = without_unused_qt_plugins(analysis.datas)
 pyz = PYZ(analysis.pure)
 
 executable = EXE(
