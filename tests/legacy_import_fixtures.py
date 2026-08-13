@@ -1,6 +1,7 @@
 import sqlite3
 import struct
 import zlib
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -50,7 +51,7 @@ def create_legacy_edb(
     transactions: tuple[LegacyTransactionFixture, ...],
     schema_override: str | None = None,
 ) -> None:
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection, connection:
         if schema_override is not None:
             connection.executescript(schema_override)
             return

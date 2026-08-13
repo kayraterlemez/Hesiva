@@ -1,4 +1,5 @@
 import os
+import logging
 from collections.abc import Callable, Iterator
 from datetime import date, time
 from pathlib import Path
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (  # noqa: E402
     QStackedWidget,
     QTabWidget,
 )
+from sqlalchemy.exc import StatementError  # noqa: E402
 
 from hesiva.application import create_application_context  # noqa: E402
 from hesiva.composition import ApplicationContext  # noqa: E402
@@ -527,3 +529,38 @@ def test_customer_load_failure_has_distinct_error_state(
     assert window.customer_list_stack.currentWidget() is window.customer_error_state
     assert window.customer_count_label.text() == "Bulunan: -"
     assert window.customer_detail_stack.currentWidget() is window.no_customer_selected_state
+
+
+def test_database_failure_logging_does_not_serialize_private_bound_parameters(
+    application_context: ApplicationContext,
+    window_factory: WindowFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    private_name = "PRIVATE CUSTOMER SENTINEL"
+    private_phone = "PRIVATE PHONE SENTINEL"
+
+    def fail_to_load(
+        _service: CustomerSummaryService,
+        *,
+        query: str = "",
+        sort: CustomerSummarySort = CustomerSummarySort.HIGHEST_DEBT,
+    ) -> list[CustomerSummary]:
+        del query, sort
+        raise StatementError(
+            "synthetic database failure",
+            "INSERT INTO customers (full_name, phone) VALUES (?, ?)",
+            (private_name, private_phone),
+            RuntimeError("driver failure"),
+        )
+
+    monkeypatch.setattr(CustomerSummaryService, "list_customer_summaries", fail_to_load)
+    with caplog.at_level(logging.ERROR, logger="hesiva.ui.main_window"):
+        window = window_factory()
+
+    assert window.customer_list_stack.currentWidget() is window.customer_error_state
+    assert "StatementError" in caplog.text
+    assert private_name not in caplog.text
+    assert private_phone not in caplog.text
+    assert "INSERT INTO" not in caplog.text
+    assert "parameters" not in caplog.text

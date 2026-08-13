@@ -1,10 +1,11 @@
 from datetime import date
 
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
+from hesiva.models.customer import Customer
 from hesiva.models.reminder import Reminder
-from hesiva.read_models import ReminderSummary
+from hesiva.read_models import ReminderSummary, StartupReminderSummary
 
 
 class ReminderRepository:
@@ -60,6 +61,43 @@ class ReminderRepository:
             .order_by(Reminder.remind_on, Reminder.id)
         )
         return list(self._session.scalars(statement).all())
+
+    def get_startup_summary(self, reference_date: date) -> StartupReminderSummary:
+        """Return application-wide due counts and the earliest active-customer target."""
+        active_due_conditions = (
+            Reminder.completed_at.is_(None),
+            Reminder.cancelled_at.is_(None),
+            Reminder.remind_on <= reference_date,
+        )
+        focus = (
+            select(
+                Reminder.id.label("reminder_id"),
+                Reminder.customer_id,
+            )
+            .join(Customer, Customer.id == Reminder.customer_id)
+            .where(
+                *active_due_conditions,
+                Customer.archived_at.is_(None),
+            )
+            .order_by(Reminder.remind_on, Reminder.id)
+            .limit(1)
+            .cte("startup_reminder_focus")
+        )
+        statement = select(
+            func.sum(case((Reminder.remind_on < reference_date, 1), else_=0)).label(
+                "overdue_count"
+            ),
+            func.sum(case((Reminder.remind_on == reference_date, 1), else_=0)).label("today_count"),
+            select(focus.c.customer_id).scalar_subquery().label("focus_customer_id"),
+            select(focus.c.reminder_id).scalar_subquery().label("focus_reminder_id"),
+        ).where(*active_due_conditions)
+        row = self._session.execute(statement).one()
+        return StartupReminderSummary(
+            overdue_count=row.overdue_count or 0,
+            today_count=row.today_count or 0,
+            focus_customer_id=row.focus_customer_id,
+            focus_reminder_id=row.focus_reminder_id,
+        )
 
     def list_summary_records(
         self,

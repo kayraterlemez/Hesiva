@@ -1,8 +1,10 @@
 import logging
 import os
 import sqlite3
+import stat
 import sys
 import tempfile
+from contextlib import closing
 from dataclasses import dataclass
 from enum import StrEnum
 from io import StringIO
@@ -14,6 +16,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy.engine import URL
 
 from hesiva.database.durability import sync_parent_directory
+from hesiva.database.semantic_validation import find_database_semantic_error
 from hesiva.models import model_metadata
 
 MIGRATION_DIRECTORY = Path(__file__).resolve().parent / "migrations"
@@ -99,23 +102,55 @@ def inspect_database(database_path: Path) -> DatabaseStatus:
         raise ValueError("The SQLite database path must be absolute.")
 
     head_revision = get_migration_head()
-    if not resolved_path.exists():
+    try:
+        path_stat = resolved_path.lstat()
+    except FileNotFoundError:
         return DatabaseStatus(DatabaseState.MISSING, head_revision)
-    if not resolved_path.is_file():
+    except OSError as error:
+        return DatabaseStatus(
+            DatabaseState.INVALID,
+            head_revision,
+            detail=f"The database path could not be inspected safely: {error}",
+        )
+    if not stat.S_ISREG(path_stat.st_mode):
         return DatabaseStatus(
             DatabaseState.INVALID,
             head_revision,
             detail="The database path is not a regular file.",
         )
+    if path_stat.st_nlink != 1:
+        return DatabaseStatus(
+            DatabaseState.INVALID,
+            head_revision,
+            detail="The database file has an unsupported linked-file identity.",
+        )
 
     try:
-        with _connect_read_only(resolved_path) as connection:
+        with closing(_connect_read_only(resolved_path)) as connection:
             integrity_result = connection.execute("PRAGMA quick_check").fetchone()
             if integrity_result != ("ok",):
                 return DatabaseStatus(
                     DatabaseState.INVALID,
                     head_revision,
                     detail="SQLite integrity verification failed.",
+                )
+
+            if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                return DatabaseStatus(
+                    DatabaseState.INVALID,
+                    head_revision,
+                    detail="The database contains invalid foreign-key relationships.",
+                )
+            if (
+                connection.execute(
+                    "SELECT 1 FROM sqlite_schema WHERE type IN ('trigger', 'view') LIMIT 1"
+                ).fetchone()
+                is not None
+            ):
+                return DatabaseStatus(
+                    DatabaseState.INVALID,
+                    head_revision,
+                    detail="The database contains unsupported schema objects.",
                 )
 
             table_names = {
@@ -188,10 +223,27 @@ def inspect_database(database_path: Path) -> DatabaseStatus:
 
 def prepare_database(database_path: Path) -> DatabaseStatus:
     """Initialize a missing database or validate an existing database for startup."""
-    status = inspect_database(database_path)
+    resolved_path = database_path.expanduser()
+    if not resolved_path.is_absolute():
+        raise ValueError("The SQLite database path must be absolute.")
+    _recover_published_initialization_link(resolved_path)
+    try:
+        path_stat = resolved_path.lstat()
+    except FileNotFoundError:
+        path_stat = None
+    except OSError as error:
+        raise InvalidDatabaseError(
+            "The existing database path could not be inspected safely and was left unchanged."
+        ) from error
+    if path_stat is not None and stat.S_ISREG(path_stat.st_mode) and path_stat.st_nlink == 1:
+        _recover_interrupted_sqlite_transaction(resolved_path)
+    status = inspect_database(resolved_path)
     if status.state is DatabaseState.MISSING:
-        return initialize_database_to_head(database_path)
+        initialized_status = initialize_database_to_head(database_path)
+        _validate_live_database_semantics(resolved_path)
+        return initialized_status
     if status.state is DatabaseState.CURRENT:
+        _validate_live_database_semantics(resolved_path)
         return status
     if status.state is DatabaseState.OUTDATED:
         raise DatabaseOutdatedError(
@@ -201,6 +253,60 @@ def prepare_database(database_path: Path) -> DatabaseStatus:
     raise InvalidDatabaseError(
         "The existing database is not a valid current Hesiva database and was left unchanged."
     )
+
+
+def _recover_published_initialization_link(database_path: Path) -> None:
+    """Remove only an abandoned same-inode first-run staging link.
+
+    POSIX publication uses a hard link so that an existing final database can
+    never be replaced. A process death after link publication but before the
+    staging name is removed leaves exactly two names for the same inode. Under
+    the already-held application-data lock, that narrowly identifiable state
+    can be completed without touching the published database.
+    """
+    try:
+        database_stat = database_path.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise InvalidDatabaseError(
+            "The existing database path could not be inspected safely and was left unchanged."
+        ) from error
+    if not stat.S_ISREG(database_stat.st_mode) or database_stat.st_nlink == 1:
+        return
+
+    prefix = f".{database_path.name}."
+    suffix = ".initializing"
+    matches: list[Path] = []
+    try:
+        for candidate in database_path.parent.iterdir():
+            if not candidate.name.startswith(prefix) or not candidate.name.endswith(suffix):
+                continue
+            candidate_stat = candidate.lstat()
+            if (
+                stat.S_ISREG(candidate_stat.st_mode)
+                and candidate_stat.st_dev == database_stat.st_dev
+                and candidate_stat.st_ino == database_stat.st_ino
+            ):
+                matches.append(candidate)
+    except OSError as error:
+        raise InvalidDatabaseError(
+            "The database linked-file identity could not be verified safely."
+        ) from error
+
+    if database_stat.st_nlink != 2 or len(matches) != 1:
+        raise InvalidDatabaseError(
+            "The existing database file has an unsupported linked-file identity and was left "
+            "unchanged."
+        )
+        return
+    try:
+        matches[0].unlink()
+        sync_parent_directory(database_path)
+    except OSError as error:
+        raise InvalidDatabaseError(
+            "An interrupted first-run database publication could not be completed safely."
+        ) from error
 
 
 def initialize_database_to_head(database_path: Path) -> DatabaseStatus:
@@ -247,6 +353,40 @@ def initialize_database_to_head(database_path: Path) -> DatabaseStatus:
 def _connect_read_only(database_path: Path) -> sqlite3.Connection:
     database_uri = f"{database_path.resolve().as_uri()}?mode=ro"
     return sqlite3.connect(database_uri, uri=True)
+
+
+def _connect_read_write(database_path: Path) -> sqlite3.Connection:
+    database_uri = f"{database_path.resolve().as_uri()}?mode=rw"
+    return sqlite3.connect(database_uri, uri=True)
+
+
+def _recover_interrupted_sqlite_transaction(database_path: Path) -> None:
+    """Let SQLite recover a hot rollback journal before read-only inspection."""
+    try:
+        with closing(_connect_read_write(database_path)) as connection:
+            connection.execute("PRAGMA schema_version").fetchone()
+    except (OSError, sqlite3.DatabaseError) as error:
+        raise InvalidDatabaseError(
+            "The existing database could not be recovered after an interrupted write and was "
+            "left unchanged."
+        ) from error
+
+
+def _validate_live_database_semantics(database_path: Path) -> None:
+    """Fail closed before application reads can consume invalid business data."""
+    try:
+        with closing(_connect_read_only(database_path)) as connection:
+            semantic_error = find_database_semantic_error(connection)
+    except (OSError, sqlite3.DatabaseError) as error:
+        raise InvalidDatabaseError(
+            "The existing database business data could not be validated safely and was left "
+            "unchanged."
+        ) from error
+    if semantic_error is not None:
+        raise InvalidDatabaseError(
+            "The existing database contains invalid business data or financial values outside "
+            "Hesiva's exact SQLite aggregation range and was left unchanged."
+        )
 
 
 def _schema_matches_metadata(database_path: Path) -> bool:
@@ -304,7 +444,10 @@ def _remove_temporary_database_files(temporary_path: Path) -> None:
         try:
             path.unlink(missing_ok=True)
         except OSError as error:
-            LOGGER.warning("Could not remove temporary database file %s: %s", path, error)
+            LOGGER.warning(
+                "A temporary database file could not be removed: %s",
+                type(error).__name__,
+            )
 
 
 def _escape_config_value(value: str) -> str:

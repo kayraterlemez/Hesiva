@@ -40,9 +40,7 @@ if [[ ! "$version" =~ ^[0-9]+([.][0-9A-Za-z~+:-]+)*$ ]]; then
 fi
 
 runtime_source="$repository_root/dist/Hesiva"
-if [[ ! -x "$runtime_source/Hesiva" ]]; then
-    "$repository_root/scripts/build_linux.sh" --build-only
-fi
+"$hesiva_python" packaging/artifact_provenance.py verify
 
 if [[ "$stage_only" == true ]]; then
     package_root="$stage_root"
@@ -63,6 +61,8 @@ install -d -m 755 \
     "$package_root/usr/share/applications" \
     "$package_root/usr/share/doc/hesiva"
 cp -a "$runtime_source/." "$package_root/opt/hesiva/"
+"$hesiva_python" packaging/artifact_provenance.py verify \
+    --runtime "$package_root/opt/hesiva"
 install -m 755 packaging/linux/hesiva "$package_root/usr/bin/hesiva"
 install -m 644 packaging/linux/hesiva.desktop \
     "$package_root/usr/share/applications/hesiva.desktop"

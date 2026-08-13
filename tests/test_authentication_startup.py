@@ -58,6 +58,9 @@ class _DialogResult:
     def deleteLater(self) -> None:
         pass
 
+    def wait_for_active_operation(self) -> None:
+        pass
+
 
 def _install_main_window_spy(monkeypatch: pytest.MonkeyPatch, calls: list[str]) -> None:
     class FakeMainWindow:
@@ -411,12 +414,67 @@ def test_main_closes_application_context_when_authentication_flow_is_cancelled(
 
     context = FakeContext()
     monkeypatch.setattr(application_module, "QApplication", FakeApplication)
+    monkeypatch.setattr(
+        application_module, "configure_application_theme", lambda _application: None
+    )
     monkeypatch.setattr(application_module, "apply_application_icon", lambda _application: True)
     monkeypatch.setattr(application_module, "create_application_context", lambda: context)
     monkeypatch.setattr(application_module, "run_startup_flow", lambda _context: None)
 
     assert application_module.main() == 0
     assert context.closed
+
+
+def test_main_schedules_authenticated_checks_only_after_main_window_is_shown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    scheduled: list[object] = []
+
+    class FakeApplication:
+        def __init__(self, _arguments: list[str]) -> None:
+            pass
+
+        def exec(self) -> int:
+            calls.append("event-loop")
+            callback = scheduled.pop()
+            callback()
+            return 0
+
+    class FakeContext:
+        def close(self) -> None:
+            calls.append("close")
+
+    class FakeMainWindow:
+        shown = False
+
+        def show(self) -> None:
+            self.shown = True
+            calls.append("show")
+
+        def run_authenticated_startup_actions(self) -> None:
+            assert self.shown
+            calls.append("startup-actions")
+
+    context = FakeContext()
+    window = FakeMainWindow()
+    monkeypatch.setattr(application_module, "QApplication", FakeApplication)
+    monkeypatch.setattr(
+        application_module,
+        "configure_application_theme",
+        lambda _application: None,
+    )
+    monkeypatch.setattr(application_module, "apply_application_icon", lambda _application: True)
+    monkeypatch.setattr(application_module, "create_application_context", lambda: context)
+    monkeypatch.setattr(application_module, "run_startup_flow", lambda _context: window)
+    monkeypatch.setattr(
+        application_module.QTimer,
+        "singleShot",
+        lambda delay, callback: (calls.append(f"scheduled-{delay}"), scheduled.append(callback)),
+    )
+
+    assert application_module.main() == 0
+    assert calls == ["show", "scheduled-0", "event-loop", "startup-actions", "close"]
 
 
 def test_application_icon_is_applied_before_normal_startup(application: QApplication) -> None:

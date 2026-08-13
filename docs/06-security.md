@@ -203,6 +203,10 @@ Logical write operations must be atomic.
 
 A failure must not leave half-completed business data.
 
+Hesiva enforces one live owner for each application-data directory. The lock covers startup
+recovery, the SQLAlchemy Engine lifetime, backup/restore publication, and shutdown. A crashed local
+owner's stale lock is recoverable; a live owner is never evicted merely because time passed.
+
 SQLite foreign key enforcement must be enabled.
 
 Important financial history must not be physically deleted by accidental cascade behavior.
@@ -231,6 +235,10 @@ User-facing errors should be understandable and should not expose unnecessary in
 Raw stack traces, SQL statements, internal exceptions, or secret values should not be shown in normal dialogs.
 
 Technical details may be logged when safe.
+
+Database and report failures are logged by operation and exception type only at UI boundaries.
+Raw exception strings and tracebacks are not logged there because SQLAlchemy errors can embed bound
+customer/financial values and filesystem errors can embed customer-derived report paths.
 
 ---
 

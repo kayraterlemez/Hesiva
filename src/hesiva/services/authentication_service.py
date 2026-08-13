@@ -4,6 +4,13 @@ from argon2 import PasswordHasher
 from argon2.exceptions import HashingError, VerificationError, VerifyMismatchError
 from argon2.low_level import Type
 
+from hesiva.authentication_policy import (
+    ARGON2_HASH_LENGTH,
+    ARGON2_MEMORY_COST_KIB,
+    ARGON2_PARALLELISM,
+    ARGON2_SALT_LENGTH,
+    ARGON2_TIME_COST,
+)
 from hesiva.configuration import (
     ApplicationConfiguration,
     ConfigurationNotFoundError,
@@ -19,12 +26,6 @@ from hesiva.services.exceptions import (
     PasswordMismatchError,
     ValidationError,
 )
-
-ARGON2_TIME_COST = 3
-ARGON2_MEMORY_COST_KIB = 65_536
-ARGON2_PARALLELISM = 4
-ARGON2_HASH_LENGTH = 32
-ARGON2_SALT_LENGTH = 16
 
 
 class AuthenticationState(Enum):

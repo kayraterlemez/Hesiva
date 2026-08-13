@@ -3,18 +3,27 @@ import sys
 from pathlib import Path
 
 from argon2 import PasswordHasher
+from PySide6.QtCore import QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
+from hesiva.application_data_lock import (
+    ApplicationDataAlreadyInUseError,
+    ApplicationDataLock,
+    ApplicationDataLockError,
+)
 from hesiva.composition import ApplicationContext, build_application_context
+from hesiva.configuration import ConfigurationStore
 from hesiva.database.paths import (
     ensure_application_data_directory,
     get_application_data_directory,
+    get_config_path,
     get_production_database_path,
 )
 from hesiva.database.startup import DatabaseStartupError, prepare_database
 from hesiva.resources import get_application_icon_path
 from hesiva.services import AuthenticationError, AuthenticationState
+from hesiva.services.backup_service import BackupService, RestoreRecoveryError
 from hesiva.ui.auth_dialogs import (
     DatabaseChoiceDialog,
     InitialPasswordDialog,
@@ -23,6 +32,7 @@ from hesiva.ui.auth_dialogs import (
 )
 from hesiva.ui.legacy_import_dialog import LegacyImportDialog
 from hesiva.ui.main_window import MainWindow
+from hesiva.ui.theme import configure_application_theme
 
 LOGGER = logging.getLogger(__name__)
 
@@ -63,13 +73,40 @@ def create_application_context(
             "Hesiva could not create or access its application data directory."
         ) from error
 
+    try:
+        ownership_lock = ApplicationDataLock(data_directory)
+        ownership_lock.acquire()
+    except ApplicationDataAlreadyInUseError as error:
+        raise ApplicationStartupError(
+            "Another Hesiva process is already using this application data. "
+            "Close the other Hesiva window before starting again."
+        ) from error
+    except ApplicationDataLockError as error:
+        raise ApplicationStartupError(
+            "Hesiva could not lock its application data for exclusive use."
+        ) from error
+    except ValueError as error:
+        raise ApplicationStartupError(
+            "Hesiva could not lock its application data for exclusive use."
+        ) from error
+
     database_path = get_production_database_path(data_directory)
     try:
+        BackupService(
+            database_path,
+            ConfigurationStore(get_config_path(data_directory)),
+        ).recover_interrupted_restore()
         prepare_database(database_path)
-        return build_application_context(database_path, password_hasher=password_hasher)
-    except DatabaseStartupError as error:
+        return build_application_context(
+            database_path,
+            application_data_lock=ownership_lock,
+            password_hasher=password_hasher,
+        )
+    except (DatabaseStartupError, RestoreRecoveryError) as error:
+        ownership_lock.release()
         raise ApplicationStartupError(str(error)) from error
     except Exception as error:
+        ownership_lock.release()
         raise ApplicationStartupError("Hesiva could not open its local database safely.") from error
 
 
@@ -136,6 +173,7 @@ def _complete_first_run(application_context: ApplicationContext) -> bool:
 
         import_dialog = LegacyImportDialog(application_context)
         import_dialog.exec()
+        import_dialog.wait_for_active_operation()
         import_succeeded = import_dialog.import_result is not None
         import_dialog.deleteLater()
         if import_succeeded:
@@ -145,8 +183,11 @@ def _complete_first_run(application_context: ApplicationContext) -> bool:
 def _finalize_setup(application_context: ApplicationContext) -> bool:
     try:
         application_context.authentication.mark_setup_complete()
-    except AuthenticationError:
-        LOGGER.exception("Hesiva setup completion configuration could not be published")
+    except AuthenticationError as error:
+        LOGGER.error(
+            "Hesiva setup completion configuration could not be published: %s",
+            type(error).__name__,
+        )
         QMessageBox.critical(
             None,
             "Kurulum Tamamlanamadı",
@@ -170,6 +211,7 @@ def _show_invalid_authentication_state() -> None:
 def main() -> int:
     """Start the Hesiva desktop application."""
     application = QApplication(sys.argv)
+    configure_application_theme(application)
     apply_application_icon(application)
     try:
         application_context = create_application_context()
@@ -177,8 +219,8 @@ def main() -> int:
         LOGGER.error("Hesiva startup failed: %s", error)
         QMessageBox.critical(None, "Hesiva Startup Error", str(error))
         return 1
-    except Exception:
-        LOGGER.exception("Unexpected error during Hesiva startup")
+    except Exception as error:
+        LOGGER.error("Unexpected error during Hesiva startup: %s", type(error).__name__)
         QMessageBox.critical(
             None,
             "Hesiva Startup Error",
@@ -191,13 +233,17 @@ def main() -> int:
         if main_window is None:
             return 0
         main_window.show()
+        QTimer.singleShot(0, main_window.run_authenticated_startup_actions)
         return application.exec()
     except ApplicationStartupError as error:
         LOGGER.error("Hesiva authenticated startup failed: %s", error)
         QMessageBox.critical(None, "Hesiva Startup Error", str(error))
         return 1
-    except Exception:
-        LOGGER.exception("Unexpected error during authenticated Hesiva startup")
+    except Exception as error:
+        LOGGER.error(
+            "Unexpected error during authenticated Hesiva startup: %s",
+            type(error).__name__,
+        )
         QMessageBox.critical(
             None,
             "Hesiva Startup Error",

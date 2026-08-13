@@ -1,8 +1,9 @@
 import logging
+from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
 
-from PySide6.QtCore import QSignalBlocker, Qt, QTimer
+from PySide6.QtCore import QDateTime, QSignalBlocker, QTime, Qt, QTimer
 from PySide6.QtGui import QAction, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -41,11 +42,13 @@ from hesiva.read_models import (
     CustomerSummarySort,
     LegacyImportResult,
     ReminderSummary,
+    StartupReminderSummary,
 )
 from hesiva.services import (
     BackupError,
     BackupPathError,
     BackupValidationError,
+    RestoreRecoveryRequiredError,
     RestoreRollbackError,
     ServiceError,
     ValidationError,
@@ -105,6 +108,11 @@ CUSTOMER_PANE_INITIAL_WIDTH = 340
 CUSTOMER_PANE_MINIMUM_WIDTH = 280
 CUSTOMER_PANE_MAXIMUM_WIDTH = 460
 SEARCH_DEBOUNCE_MILLISECONDS = 200
+
+
+def _log_failure(message: str, error: BaseException, *safe_arguments: object) -> None:
+    """Log the operation and exception type without serializing user data or SQL."""
+    LOGGER.error(f"{message}: %s", *safe_arguments, type(error).__name__)
 
 
 class EmptyState(QFrame):
@@ -180,9 +188,18 @@ class CustomerListRow(QWidget):
 class MainWindow(QMainWindow):
     """Resizable Hesiva shell bound to plain customer-summary read models."""
 
-    def __init__(self, application_context: ApplicationContext) -> None:
+    def __init__(
+        self,
+        application_context: ApplicationContext,
+        *,
+        date_provider: Callable[[], date] = date.today,
+        datetime_provider: Callable[[], datetime] | None = None,
+    ) -> None:
         super().__init__()
         self._application_context = application_context
+        self._date_provider = date_provider
+        self._datetime_provider = datetime_provider or (lambda: datetime.now().astimezone())
+        self._startup_actions_run = False
         self._customer_summaries_by_id: dict[int, CustomerSummary] = {}
         self._selected_customer_id: int | None = None
         self._selected_customer_detail: CustomerDetail | None = None
@@ -210,6 +227,11 @@ class MainWindow(QMainWindow):
         self.customer_search_input.textChanged.connect(self._schedule_customer_search)
         self.customer_sort_combo.currentIndexChanged.connect(self._customer_sort_changed)
         self.customer_list.currentItemChanged.connect(self._customer_selection_changed)
+
+        self._reminder_rollover_timer = QTimer(self)
+        self._reminder_rollover_timer.setSingleShot(True)
+        self._reminder_rollover_timer.timeout.connect(self._refresh_reminders_after_date_rollover)
+        self._schedule_reminder_rollover()
 
         self.refresh_customer_summaries()
 
@@ -469,7 +491,8 @@ class MainWindow(QMainWindow):
         self.customer_tabs.addTab(self._create_general_tab(), "Genel")
         self.customer_tabs.addTab(self._create_animals_tab(), "Hayvanlar")
         self.customer_tabs.addTab(self._create_account_history_tab(), "Hesap Hareketleri")
-        self.customer_tabs.addTab(self._create_reminders_tab(), "Hatırlatmalar")
+        self.reminders_tab = self._create_reminders_tab()
+        self.customer_tabs.addTab(self.reminders_tab, "Hatırlatmalar")
         layout.addWidget(self.customer_tabs, 1)
         return shell
 
@@ -702,9 +725,11 @@ class MainWindow(QMainWindow):
         self.receive_payment_button.clicked.connect(self._open_payment_dialog)
         actions.addWidget(self.receive_payment_button)
         actions.addStretch()
-        print_button = QPushButton("Yazdır", tab)
-        print_button.setEnabled(False)
-        actions.addWidget(print_button)
+        self.account_history_print_button = QPushButton("Yazdır", tab)
+        self.account_history_print_button.setObjectName("accountHistoryPrintButton")
+        self.account_history_print_button.setEnabled(False)
+        self.account_history_print_button.clicked.connect(self._open_customer_statement)
+        actions.addWidget(self.account_history_print_button)
         layout.addLayout(actions)
 
         self.account_history_stack = QStackedWidget(tab)
@@ -877,8 +902,8 @@ class MainWindow(QMainWindow):
                     query=query,
                     sort=sort,
                 )
-        except Exception:
-            LOGGER.exception("Customer summaries could not be loaded")
+        except Exception as error:
+            _log_failure("Customer summaries could not be loaded", error)
             self._show_customer_load_error()
             return
 
@@ -949,9 +974,11 @@ class MainWindow(QMainWindow):
         try:
             with self._application_context.services() as services:
                 detail = services.customer_detail.get_customer_detail(summary.customer_id)
-        except Exception:
-            LOGGER.exception(
-                "Customer detail could not be loaded for customer %s", summary.customer_id
+        except Exception as error:
+            _log_failure(
+                "Customer detail could not be loaded for customer %s",
+                error,
+                summary.customer_id,
             )
             self.customer_detail_stack.setCurrentWidget(self.customer_detail_error_state)
             return
@@ -1028,6 +1055,7 @@ class MainWindow(QMainWindow):
 
     def _set_report_actions_enabled(self, enabled: bool) -> None:
         self.customer_statement_action.setEnabled(enabled)
+        self.account_history_print_button.setEnabled(enabled)
 
     def _set_animal_customer_actions_enabled(self, enabled: bool) -> None:
         self.add_animal_button.setEnabled(enabled)
@@ -1053,8 +1081,12 @@ class MainWindow(QMainWindow):
         try:
             with self._application_context.services() as services:
                 animals = services.animal.list_active_records(target_customer_id)
-        except Exception:
-            LOGGER.exception("Animals could not be loaded for customer %s", target_customer_id)
+        except Exception as error:
+            _log_failure(
+                "Animals could not be loaded for customer %s",
+                error,
+                target_customer_id,
+            )
             self._animal_summaries_by_id = {}
             self.animal_table.setRowCount(0)
             self.animal_count_label.setText("Toplam Kayıt: -")
@@ -1149,9 +1181,10 @@ class MainWindow(QMainWindow):
                     target_customer_id,
                     include_inactive=include_inactive,
                 )
-        except Exception:
-            LOGGER.exception(
+        except Exception as error:
+            _log_failure(
                 "Reminders could not be loaded for customer %s",
+                error,
                 target_customer_id,
             )
             self._reminder_summaries_by_id = {}
@@ -1165,8 +1198,103 @@ class MainWindow(QMainWindow):
         self._populate_reminders(
             reminders,
             preserved_reminder_id,
-            reference_date=reference_date or date.today(),
+            reference_date=reference_date or self._date_provider(),
         )
+
+    def _schedule_reminder_rollover(self) -> None:
+        now = QDateTime.currentDateTime()
+        next_midnight = QDateTime(now.date().addDays(1), QTime(0, 0), now.timeZone())
+        milliseconds = max(1_000, now.msecsTo(next_midnight) + 1_000)
+        self._reminder_rollover_timer.start(milliseconds)
+
+    def _refresh_reminders_after_date_rollover(self) -> None:
+        try:
+            if self._selected_customer_id is not None:
+                self.refresh_reminders_for_selected_customer(
+                    reference_date=self._date_provider(),
+                )
+        finally:
+            self._schedule_reminder_rollover()
+
+    def run_authenticated_startup_actions(self) -> None:
+        """Run the non-blocking-failure startup checks once after the window is shown."""
+        if self._startup_actions_run:
+            return
+        self._startup_actions_run = True
+
+        try:
+            self._application_context.run_automatic_backup(
+                reference_datetime=self._datetime_provider(),
+            )
+        except Exception as error:
+            _log_failure("Automatic daily backup creation failed", error)
+            QMessageBox.warning(
+                self,
+                "Otomatik Yedekleme",
+                "Otomatik yedek oluşturulamadı.\nVerilerinizi manuel olarak yedeklemeniz önerilir.",
+            )
+
+        try:
+            with self._application_context.services() as services:
+                summary = services.reminder.get_startup_summary(self._date_provider())
+        except Exception as error:
+            _log_failure("The startup due-reminder summary could not be loaded", error)
+            QMessageBox.warning(
+                self,
+                "Hatırlatmalar",
+                "Hatırlatmalar kontrol edilemedi. Lütfen daha sonra yeniden deneyin.",
+            )
+            return
+
+        if summary.total_count == 0:
+            return
+        dialog = reminder_dialogs.StartupReminderSummaryDialog(summary, self)
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        dialog.deleteLater()
+        if accepted:
+            self._navigate_to_startup_reminders(summary)
+
+    def _navigate_to_startup_reminders(self, summary: StartupReminderSummary) -> None:
+        """Focus the earliest due reminder whose owner is in the active customer list."""
+        customer_id = summary.focus_customer_id
+        if customer_id is None:
+            self.statusBar().showMessage(
+                "Gecikmiş hatırlatmalar arşivlenmiş müşterilere ait olabilir.",
+                8_000,
+            )
+            return
+
+        if self.customer_search_input.text():
+            blocker = QSignalBlocker(self.customer_search_input)
+            self.customer_search_input.clear()
+            del blocker
+            self._search_timer.stop()
+            self.refresh_customer_summaries()
+
+        target_item: QListWidgetItem | None = None
+        for row in range(self.customer_list.count()):
+            item = self.customer_list.item(row)
+            if item.data(Qt.ItemDataRole.UserRole) == customer_id:
+                target_item = item
+                break
+        if target_item is None:
+            self.statusBar().showMessage(
+                "Hatırlatma sahibi aktif müşteri listesinde bulunamadı.",
+                8_000,
+            )
+            return
+
+        self.customer_list.setCurrentItem(target_item)
+        self.customer_tabs.setCurrentWidget(self.reminders_tab)
+        reminder_id = summary.focus_reminder_id
+        if reminder_id is None:
+            return
+        for row in range(self.reminder_table.rowCount()):
+            item = self.reminder_table.item(row, 0)
+            if item is not None and item.data(Qt.ItemDataRole.UserRole) == reminder_id:
+                self.reminder_table.selectRow(row)
+                self.reminder_table.setFocus()
+                break
 
     def _populate_reminders(
         self,
@@ -1267,9 +1395,10 @@ class MainWindow(QMainWindow):
         try:
             with self._application_context.services() as services:
                 rows = services.account_history.list_for_customer(target_customer_id)
-        except Exception:
-            LOGGER.exception(
+        except Exception as error:
+            _log_failure(
                 "Account history could not be loaded for customer %s",
+                error,
                 target_customer_id,
             )
             self._account_history_by_id = {}
@@ -1382,8 +1511,8 @@ class MainWindow(QMainWindow):
                 dialog.show_error("Lütfen gerekli alanları doğru şekilde doldurun.")
             except ServiceError:
                 dialog.show_error("Müşteri kaydedilemedi. Lütfen yeniden deneyin.")
-            except Exception:
-                LOGGER.exception("Customer could not be created")
+            except Exception as error:
+                _log_failure("Customer could not be created", error)
                 dialog.show_error("Müşteri kaydedilemedi. Lütfen yeniden deneyin.")
             else:
                 dialog.accept()
@@ -1430,8 +1559,12 @@ class MainWindow(QMainWindow):
                 dialog.show_error("Lütfen gerekli alanları doğru şekilde doldurun.")
             except ServiceError:
                 dialog.show_error("Müşteri güncellenemedi. Lütfen yeniden deneyin.")
-            except Exception:
-                LOGGER.exception("Customer %s could not be updated", detail.customer_id)
+            except Exception as error:
+                _log_failure(
+                    "Customer %s could not be updated",
+                    error,
+                    detail.customer_id,
+                )
                 dialog.show_error("Müşteri güncellenemedi. Lütfen yeniden deneyin.")
             else:
                 updated = True
@@ -1460,8 +1593,12 @@ class MainWindow(QMainWindow):
             self._show_customer_operation_error(
                 "Müşteri bilgileri yüklenemedi. Lütfen yeniden deneyin."
             )
-        except Exception:
-            LOGGER.exception("Customer %s could not be loaded for editing", customer_id)
+        except Exception as error:
+            _log_failure(
+                "Customer %s could not be loaded for editing",
+                error,
+                customer_id,
+            )
             self._show_customer_operation_error(
                 "Müşteri bilgileri yüklenemedi. Lütfen yeniden deneyin."
             )
@@ -1480,8 +1617,8 @@ class MainWindow(QMainWindow):
         except ServiceError:
             self._show_customer_operation_error("Müşteri arşivlenemedi. Lütfen yeniden deneyin.")
             return
-        except Exception:
-            LOGGER.exception("Customer %s could not be archived", detail.customer_id)
+        except Exception as error:
+            _log_failure("Customer %s could not be archived", error, detail.customer_id)
             self._show_customer_operation_error("Müşteri arşivlenemedi. Lütfen yeniden deneyin.")
             return
 
@@ -1509,8 +1646,8 @@ class MainWindow(QMainWindow):
                     created_animal_id = animal.id
             except ServiceError:
                 dialog.show_error("Hayvan kaydedilemedi. Lütfen yeniden deneyin.")
-            except Exception:
-                LOGGER.exception("Animal could not be created")
+            except Exception as error:
+                _log_failure("Animal could not be created", error)
                 dialog.show_error("Hayvan kaydedilemedi. Lütfen yeniden deneyin.")
             else:
                 dialog.accept()
@@ -1556,8 +1693,8 @@ class MainWindow(QMainWindow):
                     )
             except ServiceError:
                 dialog.show_error("Hayvan güncellenemedi. Lütfen yeniden deneyin.")
-            except Exception:
-                LOGGER.exception("Animal %s could not be updated", animal.animal_id)
+            except Exception as error:
+                _log_failure("Animal %s could not be updated", error, animal.animal_id)
                 dialog.show_error("Hayvan güncellenemedi. Lütfen yeniden deneyin.")
             else:
                 updated = True
@@ -1588,8 +1725,8 @@ class MainWindow(QMainWindow):
         except ServiceError:
             self._show_animal_operation_error("Hayvan arşivlenemedi. Lütfen yeniden deneyin.")
             return
-        except Exception:
-            LOGGER.exception("Animal %s could not be archived", animal.animal_id)
+        except Exception as error:
+            _log_failure("Animal %s could not be archived", error, animal.animal_id)
             self._show_animal_operation_error("Hayvan arşivlenemedi. Lütfen yeniden deneyin.")
             return
 
@@ -1603,8 +1740,8 @@ class MainWindow(QMainWindow):
         dialog = ArchivedAnimalsDialog(self)
         try:
             dialog.set_animals(self._load_archived_animals(customer_id))
-        except Exception:
-            LOGGER.exception("Archived animals could not be loaded")
+        except Exception as error:
+            _log_failure("Archived animals could not be loaded", error)
             dialog.set_animals([])
             dialog.show_error("Arşivlenmiş hayvanlar yüklenemedi.")
 
@@ -1615,8 +1752,8 @@ class MainWindow(QMainWindow):
             except ServiceError:
                 dialog.show_error("Hayvan geri açılamadı. Lütfen yeniden deneyin.")
                 return
-            except Exception:
-                LOGGER.exception("Animal %s could not be unarchived", animal_id)
+            except Exception as error:
+                _log_failure("Animal %s could not be unarchived", error, animal_id)
                 dialog.show_error("Hayvan geri açılamadı. Lütfen yeniden deneyin.")
                 return
 
@@ -1626,8 +1763,8 @@ class MainWindow(QMainWindow):
             )
             try:
                 dialog.set_animals(self._load_archived_animals(customer_id))
-            except Exception:
-                LOGGER.exception("Archived animals could not be refreshed")
+            except Exception as error:
+                _log_failure("Archived animals could not be refreshed", error)
                 dialog.show_error("Arşivlenmiş hayvan listesi yenilenemedi.")
 
         dialog.unarchive_requested.connect(unarchive_animal)
@@ -1662,8 +1799,8 @@ class MainWindow(QMainWindow):
                     created_reminder_id = reminder.id
             except ServiceError:
                 dialog.show_error("Hatırlatma kaydedilemedi. Lütfen alanları kontrol edin.")
-            except Exception:
-                LOGGER.exception("Reminder could not be created")
+            except Exception as error:
+                _log_failure("Reminder could not be created", error)
                 dialog.show_error("Hatırlatma kaydedilemedi. Lütfen yeniden deneyin.")
             else:
                 dialog.accept()
@@ -1709,9 +1846,10 @@ class MainWindow(QMainWindow):
                     )
             except ServiceError:
                 dialog.show_error("Hatırlatma güncellenemedi. Lütfen alanları kontrol edin.")
-            except Exception:
-                LOGGER.exception(
+            except Exception as error:
+                _log_failure(
                     "Reminder %s could not be updated",
+                    error,
                     reminder.reminder_id,
                 )
                 dialog.show_error("Hatırlatma güncellenemedi. Lütfen yeniden deneyin.")
@@ -1745,9 +1883,10 @@ class MainWindow(QMainWindow):
         except ServiceError:
             self._show_reminder_operation_error("Hatırlatma tamamlanamadı. Lütfen yeniden deneyin.")
             return
-        except Exception:
-            LOGGER.exception(
+        except Exception as error:
+            _log_failure(
                 "Reminder %s could not be completed",
+                error,
                 reminder.reminder_id,
             )
             self._show_reminder_operation_error("Hatırlatma tamamlanamadı. Lütfen yeniden deneyin.")
@@ -1775,9 +1914,10 @@ class MainWindow(QMainWindow):
                 "Hatırlatma iptal edilemedi. Lütfen yeniden deneyin."
             )
             return
-        except Exception:
-            LOGGER.exception(
+        except Exception as error:
+            _log_failure(
                 "Reminder %s could not be cancelled",
+                error,
                 reminder.reminder_id,
             )
             self._show_reminder_operation_error(
@@ -1804,8 +1944,8 @@ class MainWindow(QMainWindow):
                 "Hayvan seçenekleri yüklenemedi. Lütfen yeniden deneyin."
             )
             return
-        except Exception:
-            LOGGER.exception("Animal options could not be loaded")
+        except Exception as error:
+            _log_failure("Animal options could not be loaded", error)
             self._show_financial_operation_error(
                 "Hayvan seçenekleri yüklenemedi. Lütfen yeniden deneyin."
             )
@@ -1830,8 +1970,8 @@ class MainWindow(QMainWindow):
                     )
             except (ValidationError, ServiceError):
                 dialog.show_error("İşlem kaydedilemedi. Lütfen alanları kontrol edin.")
-            except Exception:
-                LOGGER.exception("Debt transaction could not be created")
+            except Exception as error:
+                _log_failure("Debt transaction could not be created", error)
                 dialog.show_error("İşlem kaydedilemedi. Lütfen yeniden deneyin.")
             else:
                 created = True
@@ -1867,8 +2007,8 @@ class MainWindow(QMainWindow):
                     )
             except (ValidationError, ServiceError):
                 dialog.show_error("Ödeme kaydedilemedi. Lütfen alanları kontrol edin.")
-            except Exception:
-                LOGGER.exception("Payment could not be created")
+            except Exception as error:
+                _log_failure("Payment could not be created", error)
                 dialog.show_error("Ödeme kaydedilemedi. Lütfen yeniden deneyin.")
             else:
                 created = True
@@ -1896,8 +2036,12 @@ class MainWindow(QMainWindow):
                     services.transaction.void_transaction(row.transaction_id, dialog.reason())
             except (ValidationError, ServiceError):
                 dialog.show_error("İşlem iptal edilemedi. Lütfen yeniden deneyin.")
-            except Exception:
-                LOGGER.exception("Transaction %s could not be voided", row.transaction_id)
+            except Exception as error:
+                _log_failure(
+                    "Transaction %s could not be voided",
+                    error,
+                    row.transaction_id,
+                )
                 dialog.show_error("İşlem iptal edilemedi. Lütfen yeniden deneyin.")
             else:
                 voided = True
@@ -1931,8 +2075,8 @@ class MainWindow(QMainWindow):
     def _open_settings_dialog(self) -> None:
         try:
             current_settings = self._application_context.settings.get_settings()
-        except Exception:
-            LOGGER.exception("Hesiva settings could not be loaded")
+        except Exception as error:
+            _log_failure("Hesiva settings could not be loaded", error)
             QMessageBox.warning(
                 self,
                 "Ayarlar Açılamadı",
@@ -1958,8 +2102,8 @@ class MainWindow(QMainWindow):
             except (ValidationError, ServiceError):
                 dialog_message = "Yedekleme konumu kaydedilemedi. Lütfen başka bir dizin seçin."
                 QMessageBox.warning(dialog, "Ayarlar Kaydedilemedi", dialog_message)
-            except Exception:
-                LOGGER.exception("The preferred backup destination could not be updated")
+            except Exception as error:
+                _log_failure("The preferred backup destination could not be updated", error)
                 QMessageBox.warning(
                     dialog,
                     "Ayarlar Kaydedilemedi",
@@ -1976,8 +2120,8 @@ class MainWindow(QMainWindow):
     def _open_about_dialog(self) -> None:
         try:
             application_version = get_application_version()
-        except Exception:
-            LOGGER.exception("The Hesiva application version could not be loaded")
+        except Exception as error:
+            _log_failure("The Hesiva application version could not be loaded", error)
             QMessageBox.warning(
                 self,
                 "Hakkında Açılamadı",
@@ -1992,6 +2136,7 @@ class MainWindow(QMainWindow):
         dialog = LegacyImportDialog(self._application_context, self)
         dialog.import_completed.connect(self._refresh_after_legacy_import)
         dialog.exec()
+        dialog.wait_for_active_operation()
         dialog.import_completed.disconnect(self._refresh_after_legacy_import)
         dialog.deleteLater()
 
@@ -2002,8 +2147,8 @@ class MainWindow(QMainWindow):
     def _open_backup_dialog(self) -> None:
         try:
             backup_directory = self._application_context.prepare_manual_backup_directory()
-        except Exception:
-            LOGGER.exception("The preferred backup directory could not be resolved")
+        except Exception as error:
+            _log_failure("The preferred backup directory could not be resolved", error)
             QMessageBox.warning(
                 self,
                 "Yedekleme Açılamadı",
@@ -2043,11 +2188,11 @@ class MainWindow(QMainWindow):
                 dialog.show_operation_error(
                     "Son yedekleme başarısız oldu: Yedekleme konumu kullanılamıyor."
                 )
-            except BackupError:
-                LOGGER.exception("Hesiva backup creation failed")
+            except BackupError as error:
+                _log_failure("Hesiva backup creation failed", error)
                 dialog.show_operation_error("Son yedekleme başarısız oldu: Yedek oluşturulamadı.")
-            except Exception:
-                LOGGER.exception("Unexpected Hesiva backup creation failure")
+            except Exception as error:
+                _log_failure("Unexpected Hesiva backup creation failure", error)
                 dialog.show_operation_error("Son yedekleme başarısız oldu: Yedek oluşturulamadı.")
             else:
                 dialog.set_destination_directory(destination.parent)
@@ -2073,12 +2218,12 @@ class MainWindow(QMainWindow):
                     "Geçersiz yedek dosyası: Yedek doğrulanamadı veya uyumlu değil."
                 )
                 return
-            except BackupError:
-                LOGGER.exception("Hesiva backup validation failed")
+            except BackupError as error:
+                _log_failure("Hesiva backup validation failed", error)
                 dialog.show_operation_error("Yedek dosyası doğrulanamadı.")
                 return
-            except Exception:
-                LOGGER.exception("Unexpected Hesiva backup validation failure")
+            except Exception as error:
+                _log_failure("Unexpected Hesiva backup validation failure", error)
                 dialog.show_operation_error("Yedek dosyası doğrulanamadı.")
                 return
 
@@ -2091,24 +2236,33 @@ class MainWindow(QMainWindow):
             dialog.set_busy(True)
             try:
                 self._application_context.restore_backup(backup_path)
-            except RestoreRollbackError as error:
-                LOGGER.exception(
-                    "Restore rollback failed; safety backup retained at %s",
-                    error.safety_backup_path,
+            except RestoreRecoveryRequiredError as error:
+                _log_failure("Restore recovery requires an application restart", error)
+                QMessageBox.critical(
+                    dialog,
+                    "Güvenli Yeniden Başlatma Gerekli",
+                    "Geri yükleme tamamlanamadı. Güvenli kurtarma sonraki açılışta "
+                    "tamamlanacaktır; yeni değişiklik yapılmaması için Hesiva şimdi kapanacak.",
                 )
+                dialog.reject()
+                QTimer.singleShot(0, self.close)
+            except RestoreRollbackError as error:
+                _log_failure("Restore rollback failed; safety backup retained", error)
                 QMessageBox.critical(
                     dialog,
                     "Geri Yükleme Tamamlanamadı",
                     "Geri yükleme ve otomatik kurtarma tamamlanamadı. "
                     "Güvenlik yedeği korundu; Hesiva'yı kapatıp teknik destek alın.",
                 )
-            except BackupError:
-                LOGGER.exception("Hesiva restore failed")
+                dialog.reject()
+                QTimer.singleShot(0, self.close)
+            except BackupError as error:
+                _log_failure("Hesiva restore failed", error)
                 dialog.show_operation_error(
                     "Geri yükleme tamamlanamadı. Mevcut veriler korundu veya geri alındı."
                 )
-            except Exception:
-                LOGGER.exception("Unexpected Hesiva restore failure")
+            except Exception as error:
+                _log_failure("Unexpected Hesiva restore failure", error)
                 dialog.show_operation_error(
                     "Geri yükleme tamamlanamadı. Mevcut veriler korundu veya geri alındı."
                 )
@@ -2167,8 +2321,8 @@ class MainWindow(QMainWindow):
         dialog = ArchivedCustomersDialog(self)
         try:
             dialog.set_customers(self._load_archived_customers())
-        except Exception:
-            LOGGER.exception("Archived customers could not be loaded")
+        except Exception as error:
+            _log_failure("Archived customers could not be loaded", error)
             dialog.set_customers([])
             dialog.show_error("Arşivlenmiş müşteriler yüklenemedi.")
 
@@ -2179,16 +2333,16 @@ class MainWindow(QMainWindow):
             except ServiceError:
                 dialog.show_error("Müşteri geri açılamadı. Lütfen yeniden deneyin.")
                 return
-            except Exception:
-                LOGGER.exception("Customer %s could not be unarchived", customer_id)
+            except Exception as error:
+                _log_failure("Customer %s could not be unarchived", error, customer_id)
                 dialog.show_error("Müşteri geri açılamadı. Lütfen yeniden deneyin.")
                 return
 
             self.refresh_customer_summaries()
             try:
                 dialog.set_customers(self._load_archived_customers())
-            except Exception:
-                LOGGER.exception("Archived customers could not be refreshed")
+            except Exception as error:
+                _log_failure("Archived customers could not be refreshed", error)
                 dialog.show_error("Arşivlenmiş müşteri listesi yenilenemedi.")
 
         dialog.unarchive_requested.connect(unarchive_customer)

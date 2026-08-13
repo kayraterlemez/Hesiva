@@ -27,6 +27,7 @@ from hesiva.ui.auth_dialogs import (  # noqa: E402
 from hesiva.ui.main_window import MainWindow  # noqa: E402
 from hesiva.ui.report_output import write_report_pdf  # noqa: E402
 from hesiva.ui.settings_dialogs import AboutDialog, SettingsDialog  # noqa: E402
+from hesiva.ui.theme import configure_application_theme  # noqa: E402
 from hesiva.version import get_application_version  # noqa: E402
 from legacy_import_fixtures import create_default_source  # noqa: E402
 
@@ -199,6 +200,21 @@ def main() -> int:
     work_root = Path(sys.argv[1]).resolve()
     work_root.mkdir(mode=0o700, parents=True, exist_ok=True)
     application = QApplication.instance() or QApplication([])
+    configure_application_theme(application)
+    application_stylesheet = application.styleSheet()
+    _require(bool(application_stylesheet), "Packaged application stylesheet is unavailable.")
+    # A nonempty application stylesheet wraps the installed base style in
+    # QStyleSheetStyle and intentionally hides its objectName. Temporarily
+    # reveal the base style rather than mistaking that Qt wrapper for a theme
+    # failure.
+    application.setStyleSheet("")
+    try:
+        _require(
+            application.style().objectName().casefold() == "fusion",
+            "Packaged application-owned style was not activated.",
+        )
+    finally:
+        application.setStyleSheet(application_stylesheet)
     _require(apply_application_icon(application), "Packaged application icon is unavailable.")
     _require(not application.windowIcon().isNull(), "Packaged application icon is invalid.")
     _exercise_first_run(application, work_root)

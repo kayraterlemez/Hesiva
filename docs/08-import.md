@@ -41,10 +41,20 @@ The parser rejects malformed/truncated framing, corrupt or unconsumed zlib strea
 declared lengths, unknown nonzero flags, unexpected markers, decompressed-size mismatches,
 trailing bytes, a missing `Frm1.edb`, or multiple members whose basename is `Frm1.edb`. Chunk count
 and recovered database size are source-declared values and are not hard-coded from one backup.
+Declared-size digit counts are bounded before integer conversion, so pathological numeric text is
+reported as an unsupported EXA source rather than escaping the import error contract.
 
 Recovered `Frm1.edb` is SQLite 3. It is created with private permissions inside a private temporary
 directory, validated for SQLite magic, opened with SQLite URI `mode=ro&immutable=1`, and placed in
 `query_only` mode. It is never passed through Hesiva startup, Alembic, or migration code.
+
+Advanced direct `.edb` selection accepts a regular, singly linked database only. Symbolic-link
+targets are resolved for sidecar checks, while hard-linked database identities are rejected because
+another filename could own an unseen WAL/journal containing committed data.
+
+An EXA recovery is not reported as successful until its private extracted database/directory has
+been removed. If cleanup fails, Hesiva preserves the primary format/read failure when one exists and
+otherwise reports a safe import-source failure rather than silently leaving private data behind.
 
 Known tables include:
 
@@ -258,6 +268,15 @@ text cells as Windows-1254/CP1254 bytes. The source reader obtains bytes and dec
 text value explicitly and strictly. Undecodable data blocks import; replacement characters,
 `errors="ignore"`, and locale-dependent conversion are forbidden. Destination strings are normal
 Python Unicode stored by Hesiva as UTF-8.
+
+Before source rows are materialized into Python, the read-only SQLite connection applies a bounded
+`SQLITE_LIMIT_LENGTH`; a separate schema-safe ceiling permits the fixed supported schema to be
+validated before the exact legacy text-cell ceiling is applied. Application-owned SQL statement
+length and the streamed aggregate legacy-text budget are bounded independently.
+
+Before a validated plan can be imported, every mapped destination customer/transaction text value
+must also fit Hesiva's shared 1 MiB UTF-8 persisted-text ceiling. Source-only fields retain their
+separate parser resource limits; they do not expand the destination storage contract.
 
 `CariKart.Tarih` and `Data.Tarih` accept only `YYYY-MM-DD`; `Data.Tarih` is required for eligible
 financial rows. Nonblank `Data.Saat` accepts only valid `HH:MM:SS`. No missing date/time is replaced

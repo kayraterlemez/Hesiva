@@ -714,10 +714,21 @@ Reminder tests should include:
 - Active reminder with both timestamps NULL
 - Multiple reminders for one customer
 - Reminder retrieval during startup
+- Application-wide overdue/today counts across customers in one bounded query
+- No startup summary for zero due reminders and at most one summary per application run
+- Safe-default summary dismissal and deterministic navigation to the existing reminder tab
+- Completed, cancelled, and future reminder exclusion, including local-date boundary behavior
 
 A reminder is active only while both `completed_at` and `cancelled_at` are NULL. A completed or cancelled reminder should not continue to appear as an active due reminder.
 
 Date boundary behavior should be tested explicitly.
+
+Automatic-backup tests use injected local datetimes and verify first-day creation, same-day skip,
+next-day creation, independent archive validation, controlled destination selection, and no retry
+after failure. Retention tests cover the 30-calendar-day boundary, corrupt lookalikes, symlinks,
+renamed/manual metadata mismatches, hard-linked ambiguity, manual/safety/unrelated preservation,
+cleanup failure after a successful backup, and the rule that cleanup never runs merely because a
+valid backup already existed for the day.
 
 ---
 
@@ -759,6 +770,31 @@ Authentication tests should verify:
 - Import-success/final-config-write recovery without duplicate import
 - Atomic credential publication and old-password preservation on failed password change
 - Real configuration in backups and pairwise database/configuration restore and rollback
+- Exclusive application-data ownership, crashed-owner recovery, and a real hot-journal startup case
+- Abrupt restore interruption before/after config publication and deterministic startup recovery
+- Backup rejection for triggers/views, foreign-key/ownership faults, non-integer kuruş, invalid
+  dates, unsafe financial aggregate ranges, resource-limit violations, and an
+  already/race-created destination
+- ZIP entry-count and central-directory limits must be enforced before `ZipFile` materializes its
+  member list
+- Symbolic-link and hard-link aliases of the live database must be rejected before SQLite opens;
+  only the exact abandoned fresh-publication hard-link pair may be recovered
+- Direct legacy `.edb` hard links must be rejected, including a real WAL case where the selected
+  alias has no adjacent sidecar but another link name owns committed WAL data
+- Exact signed-integer money boundaries, cumulative same-side overflow rejection, and capacity
+  released by voiding a movement
+- Fail-closed startup of a pre-existing financially unsafe database, with byte-for-byte
+  preservation, validation of individual voided values, and voided-row exclusion from aggregate
+  capacity
+- Backup temporal-text limits must reject oversized values through SQLite scalar predicates before
+  selecting those values into Python for canonical date/time parsing
+- Customer, animal, transaction/void, and reminder services must share the same 1 MiB UTF-8 text
+  ceiling as backup validation; legacy mapped output must be rejected before import if it exceeds
+  that destination ceiling
+- Money parsing must reject over-range or pathologically long digit input as a presentation error
+  before Python's integer-conversion guard can raise
+- Configuration parsing must classify huge JSON integers and non-standard `NaN`/infinity constants
+  as invalid configuration
 
 Settings and About tests should additionally verify:
 
@@ -774,6 +810,10 @@ Settings and About tests should additionally verify:
 Tests must never assert or log real user passwords.
 
 Test passwords should be synthetic.
+
+Alembic tests must also verify that loading the repository logging configuration does not disable
+pre-existing Hesiva loggers in the shared application/test process; otherwise later privacy-log
+regressions can pass alone while observing no records in the complete suite.
 
 ---
 
@@ -1058,6 +1098,9 @@ Backup tests should include:
 - Invalid backup rejected
 - Current database remains unchanged
 - Destination failure handled safely
+- Existing destination is never overwritten, including publication races
+- Interrupted destination writes are not reported as successful and any partial new file fails
+  normal backup validation
 
 ---
 
@@ -1374,6 +1417,7 @@ Examples:
 - Password
 - Password hash
 - Complete sensitive customer notes
+- SQLAlchemy bound parameters and customer-derived report paths
 
 Do not over-test exact log wording unless the wording itself is important.
 
@@ -1480,8 +1524,18 @@ separately frozen end-to-end runtime smoke
 bundle-content and shared-library inspection
 ```
 
-The packaged smoke covers fresh database migration, first password creation, empty setup, reopen and
-login, password change, customer/debt/balance behavior, PDF output, backup/restore of database and
+The clean build records source and complete-runtime digests. Smoke and Debian staging verify that
+record before using the artifact, and staging verifies the copied runtime again; tests deliberately
+mutate application source, the platform release icon inputs, and runtime fixtures to ensure
+stale/substituted artifacts are rejected. Windows builds invoke the same portable provenance helper
+around native PyInstaller rather than relying on Linux-only shell behavior. The
+actual user executable's fresh database is checked for SQLite integrity, the complete table set,
+and current migration head. Its Qt backing-store diagnostic must also prove that first-run reached
+a top-level UI surface rather than merely being assumed healthy because the process stayed open.
+
+The separately frozen packaged smoke covers fresh database migration, first password creation,
+empty setup, reopen and login, password change, customer/debt/balance behavior, PDF output,
+backup/restore of database and
 configuration, Settings/About/version, and synthetic Veresiye 5 import. It verifies that the release
 tree remains byte-identical and that no user state appears beside the executable. The synthetic
 legacy builder exists only in the development smoke bundle, never in the production artifact.

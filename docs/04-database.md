@@ -71,6 +71,17 @@ Financial direction is represented by the sign:
 - Negative amount → payment/credit
 - Zero → invalid financial movement
 
+Persisted user-entered business text has one shared technical ceiling of 1 MiB after UTF-8
+encoding. Services enforce the same ceiling before a write, legacy import enforces it on mapped
+destination values, and backup validation uses it when accepting a restorable snapshot. This is a
+resource and backup-compatibility bound, not a vocabulary or catalog restriction.
+
+For exact SQLite integer aggregation, V1 accepts a transaction magnitude up to
+`9223372036854775807` kuruş. Across all active transactions, the debt-side total and the
+absolute payment-side total must each remain within that same signed 64-bit maximum. This is a
+technical integrity bound, not a change to signed-money semantics; voided movements do not consume
+active aggregate capacity.
+
 A negative final customer balance is allowed and represents customer credit. The stored and
 service-layer value remains negative; presentation shows its absolute amount labeled **Fazla
 Ödeme**. Positive balances are presented as **Borç**, and zero is neutral.
@@ -248,6 +259,8 @@ with optional animal and note information.
 - Every transaction belongs to exactly one customer.
 - `description` is required.
 - `amount_kurus` must never be zero.
+- Its magnitude and the two global active side totals remain within SQLite's exact signed 64-bit
+  integer range.
 - Positive amounts increase outstanding debt.
 - Negative amounts reduce outstanding debt.
 - Payments are not allocated to individual debt transactions.

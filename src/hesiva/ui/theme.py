@@ -1,7 +1,11 @@
 """Shared visual foundation for the Hesiva desktop interface."""
 
+from PySide6.QtGui import QColor, QPalette
+from PySide6.QtWidgets import QApplication, QStyleFactory
+
 APPLICATION_STYLESHEET = """
-QMainWindow {
+QMainWindow,
+QDialog {
     background: #f4f6f8;
 }
 
@@ -45,6 +49,8 @@ QMenu::item:selected {
 QLineEdit,
 QComboBox,
 QDateEdit,
+QTimeEdit,
+QSpinBox,
 QPlainTextEdit {
     min-height: 30px;
     background: #ffffff;
@@ -52,13 +58,27 @@ QPlainTextEdit {
     border-radius: 3px;
     padding: 0 9px;
     selection-background-color: #2d649b;
+    selection-color: #ffffff;
 }
 
 QLineEdit:focus,
 QComboBox:focus,
 QDateEdit:focus,
+QTimeEdit:focus,
+QSpinBox:focus,
 QPlainTextEdit:focus {
     border: 1px solid #2d649b;
+}
+
+QLineEdit:disabled,
+QComboBox:disabled,
+QDateEdit:disabled,
+QTimeEdit:disabled,
+QSpinBox:disabled,
+QPlainTextEdit:disabled {
+    color: #56616c;
+    background: #e3e8ed;
+    border-color: #c5ccd3;
 }
 
 QComboBox::drop-down {
@@ -115,10 +135,36 @@ QPushButton[destructive="true"]:hover {
     background: #941d26;
 }
 
+QPushButton[primary="true"]:focus {
+    border: 2px solid #bcdcff;
+}
+
+QPushButton[archiveAction="true"]:focus {
+    border: 2px solid #2d649b;
+}
+
+QPushButton[destructive="true"]:focus {
+    border: 2px solid #ffd166;
+}
+
 QPushButton:disabled {
-    color: #7c8792;
+    color: #56616c;
     background: #e3e8ed;
     border-color: #d1d7de;
+}
+
+QPushButton[primary="true"]:disabled,
+QPushButton[archiveAction="true"]:disabled,
+QPushButton[destructive="true"]:disabled {
+    color: #56616c;
+    background: #e3e8ed;
+    border: 1px solid #d1d7de;
+}
+
+QCheckBox:disabled,
+QRadioButton:disabled,
+QLabel:disabled {
+    color: #56616c;
 }
 
 QSplitter::handle {
@@ -177,6 +223,24 @@ QLabel[dialogHeading="true"] {
     font-weight: 700;
 }
 
+QLabel[reminderState="overdue"] {
+    color: #704000;
+    background: #fff4d6;
+    border: 1px solid #e3c16f;
+    border-radius: 3px;
+    padding: 7px;
+    font-weight: 700;
+}
+
+QLabel[reminderState="today"] {
+    color: #173d65;
+    background: #e5effa;
+    border: 1px solid #b8d0e8;
+    border-radius: 3px;
+    padding: 7px;
+    font-weight: 700;
+}
+
 QLabel[detailCaption="true"] {
     color: #6f7a85;
     font-weight: 600;
@@ -224,8 +288,12 @@ QLabel[balanceValue="true"] {
 
 QListWidget {
     background: #ffffff;
-    border: 0;
+    border: 1px solid transparent;
     outline: 0;
+}
+
+QListWidget:focus {
+    border-color: #2d649b;
 }
 
 QListWidget::item {
@@ -319,3 +387,56 @@ QStatusBar {
     border-top: 1px solid #d8dee6;
 }
 """
+
+
+def configure_application_theme(application: QApplication) -> None:
+    """Install Hesiva's deterministic, accessible light application theme."""
+    style = QStyleFactory.create("Fusion")
+    if style is None:
+        raise RuntimeError("Qt's built-in Fusion style is unavailable.")
+    application.setStyle(style)
+
+    palette = style.standardPalette()
+    active_colors = {
+        QPalette.ColorRole.Window: "#f4f6f8",
+        QPalette.ColorRole.WindowText: "#263442",
+        QPalette.ColorRole.Base: "#ffffff",
+        QPalette.ColorRole.AlternateBase: "#f7f9fb",
+        QPalette.ColorRole.ToolTipBase: "#ffffff",
+        QPalette.ColorRole.ToolTipText: "#263442",
+        QPalette.ColorRole.Text: "#263442",
+        QPalette.ColorRole.Button: "#ffffff",
+        QPalette.ColorRole.ButtonText: "#263442",
+        QPalette.ColorRole.BrightText: "#ffffff",
+        QPalette.ColorRole.Link: "#285b8f",
+        QPalette.ColorRole.LinkVisited: "#5e3d80",
+        QPalette.ColorRole.Highlight: "#2d649b",
+        QPalette.ColorRole.HighlightedText: "#ffffff",
+        QPalette.ColorRole.PlaceholderText: "#6f7a85",
+        QPalette.ColorRole.Light: "#ffffff",
+        QPalette.ColorRole.Midlight: "#e5e9ed",
+        QPalette.ColorRole.Mid: "#cbd3dd",
+        QPalette.ColorRole.Dark: "#9aa6b2",
+        QPalette.ColorRole.Shadow: "#59636e",
+    }
+    for group in (QPalette.ColorGroup.Active, QPalette.ColorGroup.Inactive):
+        for role, color in active_colors.items():
+            palette.setColor(group, role, QColor(color))
+
+    disabled_colors = {
+        **active_colors,
+        QPalette.ColorRole.WindowText: "#56616c",
+        QPalette.ColorRole.Base: "#e3e8ed",
+        QPalette.ColorRole.AlternateBase: "#e9edf1",
+        QPalette.ColorRole.Text: "#56616c",
+        QPalette.ColorRole.Button: "#e3e8ed",
+        QPalette.ColorRole.ButtonText: "#56616c",
+        QPalette.ColorRole.Highlight: "#b9c2cc",
+        QPalette.ColorRole.HighlightedText: "#263442",
+        QPalette.ColorRole.PlaceholderText: "#56616c",
+    }
+    for role, color in disabled_colors.items():
+        palette.setColor(QPalette.ColorGroup.Disabled, role, QColor(color))
+
+    application.setPalette(palette)
+    application.setStyleSheet(APPLICATION_STYLESHEET)

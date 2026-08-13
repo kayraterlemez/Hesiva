@@ -6,8 +6,10 @@ import pytest
 from sqlalchemy import Engine, event, func, select
 from sqlalchemy.orm import Session
 
+from hesiva import data_limits
 from hesiva.database.base import Base
 from hesiva.database.engine import create_sqlite_engine
+from hesiva.financial_integrity import SQLITE_SIGNED_INTEGER_MAX
 from hesiva.models import Animal, Customer, Reminder, Transaction
 from hesiva.repositories import (
     AnimalRepository,
@@ -69,6 +71,79 @@ def reminder_service(session: Session) -> ReminderService:
         ReminderRepository(session),
         CustomerRepository(session),
     )
+
+
+def test_business_services_share_utf8_persisted_text_limit_without_partial_writes(
+    database: tuple[Engine, Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine, session = database
+    customers = customer_service(session)
+    animals = animal_service(session)
+    transactions = transaction_service(session)
+    reminders = reminder_service(session)
+    customer = customers.create_customer("Owner")
+    transaction = transactions.create_debt(
+        customer.id,
+        transaction_date=date(2026, 8, 13),
+        description="Debt",
+        amount_kurus=100,
+    )
+    monkeypatch.setattr(data_limits, "PERSISTED_USER_TEXT_MAX_BYTES", 4)
+
+    with pytest.raises(ValidationError, match="UTF-8 size limit"):
+        customers.create_customer("şşş")
+    with pytest.raises(ValidationError, match="UTF-8 size limit"):
+        customers.create_customer("New", notes="xxxxx")
+    with pytest.raises(ValidationError, match="UTF-8 size limit"):
+        animals.create_animal(customer.id, notes="xxxxx")
+    with pytest.raises(ValidationError, match="UTF-8 size limit"):
+        transactions.create_debt(
+            customer.id,
+            transaction_date=date(2026, 8, 13),
+            description="xxxxx",
+            amount_kurus=100,
+        )
+    with pytest.raises(ValidationError, match="UTF-8 size limit"):
+        transactions.create_debt(
+            customer.id,
+            transaction_date=date(2026, 8, 13),
+            description="Debt",
+            amount_kurus=100,
+            note="xxxxx",
+        )
+    with pytest.raises(ValidationError, match="UTF-8 size limit"):
+        transactions.void_transaction(transaction.id, "xxxxx")
+    with pytest.raises(ValidationError, match="UTF-8 size limit"):
+        reminders.create_reminder(customer.id, date(2026, 8, 13), "xxxxx")
+
+    assert transaction.voided_at is None
+    with Session(engine) as verification_session:
+        assert verification_session.scalar(select(func.count()).select_from(Customer)) == 1
+        assert verification_session.scalar(select(func.count()).select_from(Animal)) == 0
+        assert verification_session.scalar(select(func.count()).select_from(Transaction)) == 1
+        assert verification_session.scalar(select(func.count()).select_from(Reminder)) == 0
+
+
+@pytest.mark.parametrize(
+    "customer_values",
+    (
+        {"full_name": "\ud800"},
+        {"full_name": "Valid name", "notes": "\udfff"},
+    ),
+    ids=("required-text", "optional-text"),
+)
+def test_persisted_lone_surrogates_are_reported_as_validation_errors(
+    customer_values: dict[str, str],
+    database: tuple[Engine, Session],
+) -> None:
+    engine, session = database
+
+    with pytest.raises(ValidationError, match="valid Unicode text"):
+        customer_service(session).create_customer(**customer_values)
+
+    with Session(engine) as verification_session:
+        assert verification_session.scalar(select(func.count()).select_from(Customer)) == 0
 
 
 def test_customer_service_creates_normalized_customer_and_commits(
@@ -424,6 +499,118 @@ def test_transaction_service_rejects_nonpositive_magnitudes(
 
     with Session(engine) as verification_session:
         assert verification_session.scalar(select(func.count()).select_from(Transaction)) == 0
+
+
+@pytest.mark.parametrize("method_name", ["create_debt", "create_payment"])
+def test_transaction_service_accepts_exact_maximum_magnitude_and_rejects_max_plus_one(
+    database: tuple[Engine, Session],
+    method_name: str,
+) -> None:
+    engine, session = database
+    customer = customer_service(session).create_customer("Boundary Customer")
+    service = transaction_service(session)
+    create_transaction = getattr(service, method_name)
+
+    transaction = create_transaction(
+        customer.id,
+        transaction_date=date(2026, 8, 7),
+        description="Exact boundary",
+        amount_kurus=SQLITE_SIGNED_INTEGER_MAX,
+    )
+
+    expected_amount = (
+        SQLITE_SIGNED_INTEGER_MAX if method_name == "create_debt" else -SQLITE_SIGNED_INTEGER_MAX
+    )
+    assert transaction.amount_kurus == expected_amount
+    assert service.calculate_balance(customer.id) == expected_amount
+
+    with pytest.raises(ValidationError, match="positive integer magnitude"):
+        create_transaction(
+            customer.id,
+            transaction_date=date(2026, 8, 8),
+            description="Outside boundary",
+            amount_kurus=SQLITE_SIGNED_INTEGER_MAX + 1,
+        )
+
+    with Session(engine) as verification_session:
+        assert verification_session.scalar(select(func.count()).select_from(Transaction)) == 1
+
+
+def test_transaction_service_rejects_cumulative_same_side_overflow_only(
+    database: tuple[Engine, Session],
+) -> None:
+    engine, session = database
+    customer = customer_service(session).create_customer("Aggregate Boundary Customer")
+    service = transaction_service(session)
+    service.create_debt(
+        customer.id,
+        transaction_date=date(2026, 8, 7),
+        description="Nearly full debt side",
+        amount_kurus=SQLITE_SIGNED_INTEGER_MAX - 1,
+    )
+
+    with pytest.raises(ValidationError, match="exact financial range"):
+        service.create_debt(
+            customer.id,
+            transaction_date=date(2026, 8, 8),
+            description="Would overflow debt side",
+            amount_kurus=2,
+        )
+
+    payment = service.create_payment(
+        customer.id,
+        transaction_date=date(2026, 8, 9),
+        description="Independent payment side",
+        amount_kurus=SQLITE_SIGNED_INTEGER_MAX,
+    )
+    assert payment.amount_kurus == -SQLITE_SIGNED_INTEGER_MAX
+    assert service.calculate_balance(customer.id) == -1
+
+    with pytest.raises(ValidationError, match="exact financial range"):
+        service.create_payment(
+            customer.id,
+            transaction_date=date(2026, 8, 10),
+            description="Would overflow payment side",
+            amount_kurus=1,
+        )
+
+    with Session(engine) as verification_session:
+        assert verification_session.scalar(select(func.count()).select_from(Transaction)) == 2
+
+
+def test_voiding_a_boundary_transaction_releases_active_aggregate_capacity(
+    database: tuple[Engine, Session],
+) -> None:
+    _, session = database
+    customer = customer_service(session).create_customer("Void Capacity Customer")
+    service = transaction_service(session)
+    original = service.create_debt(
+        customer.id,
+        transaction_date=date(2026, 8, 7),
+        description="Original maximum debt",
+        amount_kurus=SQLITE_SIGNED_INTEGER_MAX,
+    )
+
+    with pytest.raises(ValidationError, match="exact financial range"):
+        service.create_debt(
+            customer.id,
+            transaction_date=date(2026, 8, 8),
+            description="No remaining capacity",
+            amount_kurus=1,
+        )
+
+    service.void_transaction(original.id, "Incorrect entry")
+    replacement = service.create_debt(
+        customer.id,
+        transaction_date=date(2026, 8, 9),
+        description="Replacement maximum debt",
+        amount_kurus=SQLITE_SIGNED_INTEGER_MAX,
+    )
+
+    assert replacement.amount_kurus == SQLITE_SIGNED_INTEGER_MAX
+    assert service.calculate_balance(customer.id) == SQLITE_SIGNED_INTEGER_MAX
+    assert service.list_for_customer(customer.id) == [replacement]
+    assert service.list_for_customer(customer.id, include_voided=True) == [original, replacement]
 
 
 def test_transaction_service_rejects_invalid_description_date_and_customers(

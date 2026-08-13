@@ -1,5 +1,6 @@
 import copy
 import json
+import math
 import os
 import tempfile
 from dataclasses import dataclass
@@ -10,9 +11,18 @@ from argon2 import extract_parameters
 from argon2.exceptions import InvalidHashError
 from argon2.low_level import Type
 
+from hesiva.authentication_policy import (
+    ARGON2_ENCODED_HASH_LENGTH_LIMIT,
+    ARGON2_HASH_LENGTH,
+    ARGON2_MEMORY_COST_KIB,
+    ARGON2_PARALLELISM,
+    ARGON2_SALT_LENGTH,
+    ARGON2_TIME_COST,
+)
 from hesiva.database.durability import sync_parent_directory
 
 CONFIG_FORMAT_VERSION = 1
+CONFIGURATION_SIZE_LIMIT = 4 * 1024 * 1024
 _MISSING = object()
 
 
@@ -46,6 +56,12 @@ class ApplicationConfiguration:
     def from_payload(cls, payload: Any) -> "ApplicationConfiguration":
         if not isinstance(payload, dict):
             raise InvalidConfigurationError("The Hesiva configuration root is invalid.")
+        try:
+            _validate_json_domain(payload)
+        except RecursionError as error:
+            raise InvalidConfigurationError(
+                "The Hesiva configuration is too deeply nested."
+            ) from error
         format_version = payload.get("format_version")
         if type(format_version) is not int or format_version != CONFIG_FORMAT_VERSION:
             raise InvalidConfigurationError("The Hesiva configuration version is invalid.")
@@ -54,6 +70,12 @@ class ApplicationConfiguration:
             raise InvalidConfigurationError("The authentication configuration is invalid.")
         password_hash = authentication.get("password_hash")
         if not isinstance(password_hash, str) or not password_hash.strip():
+            raise InvalidConfigurationError("The stored password hash is invalid.")
+        try:
+            encoded_password_hash = password_hash.encode("ascii")
+        except UnicodeEncodeError as error:
+            raise InvalidConfigurationError("The stored password hash is invalid.") from error
+        if len(encoded_password_hash) > ARGON2_ENCODED_HASH_LENGTH_LIMIT:
             raise InvalidConfigurationError("The stored password hash is invalid.")
         try:
             parameters = extract_parameters(password_hash)
@@ -67,6 +89,11 @@ class ApplicationConfiguration:
             or parameters.parallelism < 1
             or parameters.hash_len < 4
             or parameters.salt_len < 8
+            or parameters.time_cost > ARGON2_TIME_COST
+            or parameters.memory_cost > ARGON2_MEMORY_COST_KIB
+            or parameters.parallelism > ARGON2_PARALLELISM
+            or parameters.hash_len > ARGON2_HASH_LENGTH
+            or parameters.salt_len > ARGON2_SALT_LENGTH
         ):
             raise InvalidConfigurationError("The stored password hash is not Argon2id.")
         if type(authentication.get("setup_complete")) is not bool:
@@ -88,7 +115,13 @@ class ApplicationConfiguration:
                     raise InvalidConfigurationError(
                         "The backup destination configuration is invalid."
                     )
-        return cls(copy.deepcopy(payload))
+        try:
+            preserved_payload = copy.deepcopy(payload)
+        except RecursionError as error:
+            raise InvalidConfigurationError("The Hesiva configuration is too deeply nested.") from (
+                error
+            )
+        return cls(preserved_payload)
 
     @classmethod
     def new(cls, password_hash: str, *, setup_complete: bool) -> "ApplicationConfiguration":
@@ -148,7 +181,14 @@ class ApplicationConfiguration:
 
     def to_bytes(self) -> bytes:
         return (
-            json.dumps(self._payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+            json.dumps(
+                self._payload,
+                ensure_ascii=False,
+                allow_nan=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
         ).encode("utf-8")
 
 
@@ -168,7 +208,8 @@ class ConfigurationStore:
 
     def load(self) -> ApplicationConfiguration:
         try:
-            payload_bytes = self.path.read_bytes()
+            with self.path.open("rb") as file_handle:
+                payload_bytes = file_handle.read(CONFIGURATION_SIZE_LIMIT + 1)
         except FileNotFoundError as error:
             raise ConfigurationNotFoundError("The Hesiva configuration does not exist.") from error
         except OSError as error:
@@ -177,9 +218,15 @@ class ConfigurationStore:
 
     @staticmethod
     def parse_bytes(payload_bytes: bytes) -> ApplicationConfiguration:
+        if len(payload_bytes) > CONFIGURATION_SIZE_LIMIT:
+            raise InvalidConfigurationError("The Hesiva configuration is too large.")
         try:
-            payload = json.loads(payload_bytes.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            payload = json.loads(
+                payload_bytes.decode("utf-8"),
+                parse_constant=_reject_nonstandard_json_constant,
+                parse_float=_parse_finite_json_float,
+            )
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError) as error:
             raise InvalidConfigurationError("The Hesiva configuration is malformed.") from error
         return ApplicationConfiguration.from_payload(payload)
 
@@ -187,13 +234,16 @@ class ConfigurationStore:
         validated = ApplicationConfiguration.from_payload(configuration.to_payload())
         previous_bytes: bytes | None
         try:
-            previous_bytes = self.path.read_bytes()
+            with self.path.open("rb") as file_handle:
+                previous_bytes = file_handle.read(CONFIGURATION_SIZE_LIMIT + 1)
         except FileNotFoundError:
             previous_bytes = None
         except OSError as error:
             raise ConfigurationWriteError(
                 "The prior Hesiva configuration could not be preserved."
             ) from error
+        if previous_bytes is not None and len(previous_bytes) > CONFIGURATION_SIZE_LIMIT:
+            raise ConfigurationWriteError("The prior Hesiva configuration is too large.")
 
         staged_path = self.stage(validated, suffix=".config.json")
         published = False
@@ -203,7 +253,7 @@ class ConfigurationStore:
             self._set_private_permissions(self.path)
             sync_parent_directory(self.path)
         except Exception as error:
-            staged_path.unlink(missing_ok=True)
+            self._remove_staged_path(staged_path, primary_error=error)
             if published:
                 try:
                     self._restore_previous(previous_bytes)
@@ -230,19 +280,29 @@ class ConfigurationStore:
         )
         staged_path = Path(name)
         try:
+            payload_bytes = validated.to_bytes()
+            if len(payload_bytes) > CONFIGURATION_SIZE_LIMIT:
+                raise ConfigurationWriteError("The Hesiva configuration is too large.")
             if os.name == "posix":
                 os.fchmod(file_descriptor, 0o600)
             with os.fdopen(file_descriptor, "wb") as file_handle:
-                file_handle.write(validated.to_bytes())
+                file_handle.write(payload_bytes)
                 file_handle.flush()
                 os.fsync(file_handle.fileno())
-        except Exception:
+        except Exception as error:
             try:
                 os.close(file_descriptor)
-            except OSError:
-                pass
-            staged_path.unlink(missing_ok=True)
-            raise
+            except OSError as cleanup_error:
+                error.add_note(
+                    "The configuration staging descriptor could not be closed cleanly: "
+                    f"{type(cleanup_error).__name__}."
+                )
+            self._remove_staged_path(staged_path, primary_error=error)
+            if isinstance(error, ConfigurationWriteError):
+                raise
+            raise ConfigurationWriteError(
+                "The Hesiva configuration could not be staged safely."
+            ) from error
         return staged_path
 
     def _restore_previous(self, previous_bytes: bytes | None) -> None:
@@ -252,14 +312,83 @@ class ConfigurationStore:
             return
         previous = self.parse_bytes(previous_bytes)
         rollback_path = self.stage(previous, suffix=".config-rollback.json")
+        primary_error: BaseException | None = None
         try:
             os.replace(rollback_path, self.path)
             self._set_private_permissions(self.path)
             sync_parent_directory(self.path)
+        except BaseException as error:
+            primary_error = error
+            raise
         finally:
-            rollback_path.unlink(missing_ok=True)
+            self._remove_staged_path(rollback_path, primary_error=primary_error)
+
+    @staticmethod
+    def _remove_staged_path(
+        staged_path: Path,
+        *,
+        primary_error: BaseException | None,
+    ) -> None:
+        """Remove private staging without replacing a more important failure."""
+        try:
+            staged_path.unlink(missing_ok=True)
+        except OSError as cleanup_error:
+            if primary_error is not None:
+                primary_error.add_note(
+                    "A private configuration staging file could not be removed: "
+                    f"{type(cleanup_error).__name__}."
+                )
+                return
+            raise ConfigurationWriteError(
+                "A private configuration staging file could not be removed safely."
+            ) from cleanup_error
 
     @staticmethod
     def _set_private_permissions(path: Path) -> None:
         if os.name == "posix":
             path.chmod(0o600)
+
+
+def _reject_nonstandard_json_constant(value: str) -> None:
+    raise ValueError(f"Non-standard JSON numeric constant: {value}")
+
+
+def _parse_finite_json_float(value: str) -> float:
+    parsed_value = float(value)
+    if not math.isfinite(parsed_value):
+        raise ValueError("JSON numeric value is outside the finite range.")
+    return parsed_value
+
+
+def _validate_json_domain(value: object) -> None:
+    """Reject values that cannot make a strict, round-trippable JSON document."""
+    if value is None or type(value) in {bool, int}:
+        return
+    if type(value) is str:
+        _validate_unicode_text(value)
+        return
+    if type(value) is float:
+        if math.isfinite(value):
+            return
+        raise InvalidConfigurationError("The Hesiva configuration contains a non-finite number.")
+    if isinstance(value, list):
+        for item in value:
+            _validate_json_domain(item)
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise InvalidConfigurationError("The Hesiva configuration contains a non-text key.")
+            _validate_unicode_text(key)
+            _validate_json_domain(item)
+        return
+    raise InvalidConfigurationError("The Hesiva configuration contains an unsupported value.")
+
+
+def _validate_unicode_text(value: str) -> None:
+    try:
+        value.encode("utf-8", errors="strict")
+    except UnicodeEncodeError as error:
+        raise InvalidConfigurationError(
+            "The Hesiva configuration contains invalid Unicode text."
+        ) from error

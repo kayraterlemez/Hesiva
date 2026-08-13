@@ -14,7 +14,7 @@ from PySide6.QtWidgets import QApplication, QDialog, QMessageBox  # noqa: E402
 
 from hesiva.application import create_application_context  # noqa: E402
 from hesiva.composition import ApplicationContext  # noqa: E402
-from hesiva.services import BackupError  # noqa: E402
+from hesiva.services import BackupError, RestoreRecoveryRequiredError  # noqa: E402
 from hesiva.ui.backup_dialogs import BackupDialog, RestoreConfirmationDialog  # noqa: E402
 from hesiva.ui.main_window import MainWindow  # noqa: E402
 
@@ -302,6 +302,49 @@ def test_restore_failure_does_not_report_success(
 
     assert "Geri yükleme tamamlanamadı" in displayed_error
     assert information_calls == 0
+
+
+def test_restore_recovery_required_closes_window_before_more_changes(
+    application: QApplication,
+    main_window: MainWindow,
+    application_context: ApplicationContext,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive_path = tmp_path / "valid.zip"
+    application_context.create_backup(archive_path)
+    monkeypatch.setattr(
+        "hesiva.ui.main_window.QFileDialog.getOpenFileName",
+        lambda *_args, **_kwargs: (str(archive_path), "Hesiva Yedeği (*.zip)"),
+    )
+    monkeypatch.setattr(
+        RestoreConfirmationDialog,
+        "exec",
+        lambda _self: QDialog.DialogCode.Accepted,
+    )
+    messages: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "critical",
+        lambda _parent, title, message: messages.append((title, message)) or QMessageBox.Ok,
+    )
+
+    def require_recovery(_path: Path) -> None:
+        raise RestoreRecoveryRequiredError("synthetic pending recovery")
+
+    monkeypatch.setattr(application_context, "restore_backup", require_recovery)
+
+    _run_backup_dialog(main_window, lambda dialog: dialog.restore_button.click())
+    application.processEvents()
+
+    assert not main_window.isVisible()
+    assert messages == [
+        (
+            "Güvenli Yeniden Başlatma Gerekli",
+            "Geri yükleme tamamlanamadı. Güvenli kurtarma sonraki açılışta "
+            "tamamlanacaktır; yeni değişiklik yapılmaması için Hesiva şimdi kapanacak.",
+        )
+    ]
 
 
 def test_main_window_contains_no_sqlite_or_database_file_manipulation() -> None:

@@ -6,6 +6,7 @@ import pytest
 from argon2 import PasswordHasher, extract_parameters
 from argon2.low_level import Type
 
+from hesiva import configuration as configuration_module
 from hesiva.configuration import (
     CONFIG_FORMAT_VERSION,
     ApplicationConfiguration,
@@ -127,6 +128,205 @@ def test_configuration_rejects_a_valid_non_argon2id_hash() -> None:
                 },
             }
         )
+
+
+def test_configuration_rejects_argon2id_parameters_above_locked_policy(
+    fast_hasher: PasswordHasher,
+) -> None:
+    baseline_hash = fast_hasher.hash("synthetic")
+
+    def with_costs(*, memory_cost: int, time_cost: int, parallelism: int) -> str:
+        fields = baseline_hash.split("$")
+        fields[3] = f"m={memory_cost},t={time_cost},p={parallelism}"
+        return "$".join(fields)
+
+    hostile_hashes = (
+        with_costs(memory_cost=65_537, time_cost=1, parallelism=1),
+        with_costs(memory_cost=1024, time_cost=4, parallelism=1),
+        with_costs(memory_cost=1024, time_cost=1, parallelism=5),
+        PasswordHasher(
+            time_cost=1,
+            memory_cost=1024,
+            parallelism=1,
+            hash_len=33,
+            salt_len=8,
+            type=Type.ID,
+        ).hash("synthetic"),
+        PasswordHasher(
+            time_cost=1,
+            memory_cost=1024,
+            parallelism=1,
+            hash_len=16,
+            salt_len=17,
+            type=Type.ID,
+        ).hash("synthetic"),
+    )
+
+    for password_hash in hostile_hashes:
+        with pytest.raises(InvalidConfigurationError):
+            ApplicationConfiguration.from_payload(
+                {
+                    "format_version": 1,
+                    "authentication": {
+                        "password_hash": password_hash,
+                        "setup_complete": True,
+                    },
+                }
+            )
+
+
+def test_configuration_rejects_oversized_hash_before_argon_parsing(
+    fast_hasher: PasswordHasher,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    password_hash = fast_hasher.hash("synthetic") + "x" * 1024
+
+    def unexpected_extract(_password_hash: str) -> object:
+        raise AssertionError("Oversized hashes must be rejected before Argon parsing.")
+
+    monkeypatch.setattr(configuration_module, "extract_parameters", unexpected_extract)
+
+    with pytest.raises(InvalidConfigurationError, match="password hash"):
+        ApplicationConfiguration.from_payload(
+            {
+                "format_version": 1,
+                "authentication": {
+                    "password_hash": password_hash,
+                    "setup_complete": True,
+                },
+            }
+        )
+
+
+def test_configuration_size_is_bounded_before_json_parsing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = ConfigurationStore(tmp_path / "config.json")
+    store.path.write_bytes(b" " * 65)
+    monkeypatch.setattr(configuration_module, "CONFIGURATION_SIZE_LIMIT", 64)
+
+    def unexpected_json_loads(_payload: str) -> object:
+        raise AssertionError("Oversized configuration must be rejected before JSON parsing.")
+
+    monkeypatch.setattr(configuration_module.json, "loads", unexpected_json_loads)
+
+    with pytest.raises(InvalidConfigurationError, match="too large"):
+        store.load()
+    with pytest.raises(InvalidConfigurationError, match="too large"):
+        store.parse_bytes(b" " * 65)
+
+
+def test_deeply_nested_configuration_is_rejected_as_invalid() -> None:
+    nested_json = "[" * 10_000 + "null" + "]" * 10_000
+
+    with pytest.raises(InvalidConfigurationError, match="malformed"):
+        ConfigurationStore.parse_bytes(nested_json.encode("utf-8"))
+
+
+def test_configuration_rejects_huge_json_integer_as_malformed(
+    fast_hasher: PasswordHasher,
+) -> None:
+    password_hash = json.dumps(fast_hasher.hash("synthetic"))
+    payload = (
+        '{"format_version":1,"authentication":{"password_hash":'
+        + password_hash
+        + ',"setup_complete":true},"future":'
+        + "9" * 4301
+        + "}"
+    )
+
+    with pytest.raises(InvalidConfigurationError, match="malformed"):
+        ConfigurationStore.parse_bytes(payload.encode("utf-8"))
+
+
+@pytest.mark.parametrize("constant", ("NaN", "Infinity", "-Infinity", "1e9999", "-1e9999"))
+def test_configuration_rejects_nonfinite_json_numbers(
+    constant: str,
+    fast_hasher: PasswordHasher,
+) -> None:
+    password_hash = json.dumps(fast_hasher.hash("synthetic"))
+    payload = (
+        '{"format_version":1,"authentication":{"password_hash":'
+        + password_hash
+        + ',"setup_complete":true},"future":'
+        + constant
+        + "}"
+    )
+
+    with pytest.raises(InvalidConfigurationError, match="malformed"):
+        ConfigurationStore.parse_bytes(payload.encode("utf-8"))
+
+
+@pytest.mark.parametrize("nonfinite_value", (float("nan"), float("inf"), -float("inf")))
+def test_configuration_rejects_programmatic_nonfinite_unknown_values(
+    nonfinite_value: float,
+    fast_hasher: PasswordHasher,
+) -> None:
+    with pytest.raises(InvalidConfigurationError, match="non-finite"):
+        ApplicationConfiguration.from_payload(
+            {
+                "format_version": 1,
+                "authentication": {
+                    "password_hash": fast_hasher.hash("synthetic"),
+                    "setup_complete": True,
+                },
+                "future": {"nested": [nonfinite_value]},
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "unknown_field",
+    ('"future":"\\ud800"', '"\\ud800":"future"'),
+    ids=("unknown-value", "unknown-key"),
+)
+def test_configuration_parse_and_load_reject_lone_unicode_surrogates(
+    unknown_field: str,
+    fast_hasher: PasswordHasher,
+    tmp_path: Path,
+) -> None:
+    password_hash = json.dumps(fast_hasher.hash("synthetic"))
+    payload_bytes = (
+        '{"format_version":1,"authentication":{"password_hash":'
+        + password_hash
+        + ',"setup_complete":true},'
+        + unknown_field
+        + "}"
+    ).encode("utf-8")
+
+    with pytest.raises(InvalidConfigurationError, match="invalid Unicode"):
+        ConfigurationStore.parse_bytes(payload_bytes)
+
+    store = ConfigurationStore(tmp_path / "config.json")
+    store.path.write_bytes(payload_bytes)
+    with pytest.raises(InvalidConfigurationError, match="invalid Unicode"):
+        store.load()
+
+
+def test_configuration_store_rejects_oversized_serialization_without_staging(
+    tmp_path: Path,
+    fast_hasher: PasswordHasher,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = ConfigurationStore(tmp_path / "config.json")
+    configuration = ApplicationConfiguration.from_payload(
+        {
+            "format_version": 1,
+            "authentication": {
+                "password_hash": fast_hasher.hash("synthetic"),
+                "setup_complete": True,
+            },
+            "future": "preserve me",
+        }
+    )
+    monkeypatch.setattr(configuration_module, "CONFIGURATION_SIZE_LIMIT", 1)
+
+    with pytest.raises(ConfigurationWriteError, match="too large"):
+        store.save(configuration)
+
+    assert not store.path.exists()
+    assert not list(tmp_path.glob(".hesiva-*"))
 
 
 def test_initial_password_persists_exact_schema_without_plaintext_and_verifies(
@@ -380,4 +580,35 @@ def test_configuration_store_reports_direct_write_error_without_partial_file(
 
     with pytest.raises(ConfigurationWriteError):
         store.save(ApplicationConfiguration.new(fast_hasher.hash("x"), setup_complete=False))
+    assert not store.path.exists()
+
+
+def test_configuration_cleanup_failure_does_not_mask_publication_error(
+    tmp_path: Path,
+    fast_hasher: PasswordHasher,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = ConfigurationStore(tmp_path / "config.json")
+    real_unlink = Path.unlink
+
+    def fail_replace(_source: Path, _destination: Path) -> None:
+        raise OSError("primary publication failure")
+
+    def fail_staged_unlink(path: Path, *, missing_ok: bool = False) -> None:
+        if path.name.startswith(".hesiva-"):
+            raise PermissionError("synthetic sharing violation")
+        real_unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(configuration_module.os, "replace", fail_replace)
+    monkeypatch.setattr(Path, "unlink", fail_staged_unlink)
+
+    with pytest.raises(ConfigurationWriteError) as caught:
+        store.save(ApplicationConfiguration.new(fast_hasher.hash("x"), setup_complete=False))
+
+    assert isinstance(caught.value.__cause__, OSError)
+    assert str(caught.value.__cause__) == "primary publication failure"
+    assert any(
+        "configuration staging file could not be removed" in note
+        for note in caught.value.__cause__.__notes__
+    )
     assert not store.path.exists()

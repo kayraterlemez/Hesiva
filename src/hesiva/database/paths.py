@@ -3,6 +3,8 @@ import sys
 from collections.abc import Mapping
 from pathlib import Path
 
+from hesiva.database.durability import sync_parent_directory
+
 APPLICATION_DIRECTORY_NAME = "hesiva"
 WINDOWS_APPLICATION_DIRECTORY_NAME = "Hesiva"
 DATABASE_FILENAME = "hesiva.db"
@@ -68,7 +70,21 @@ def ensure_application_data_directory(application_data_directory: Path | None = 
         if application_data_directory is None
         else application_data_directory
     )
+    missing_directories: list[Path] = []
+    candidate = data_directory
+    while not candidate.exists():
+        missing_directories.append(candidate)
+        if candidate.parent == candidate:
+            break
+        candidate = candidate.parent
+
     data_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     if os.name == "posix" and not data_directory.is_symlink():
         data_directory.chmod(0o700)
+        # Persist every directory entry created by ``parents=True`` from the
+        # existing ancestor down. Files fsynced inside a newly-created directory
+        # are not a durable first-run database if the directory entry itself can
+        # disappear after a power loss.
+        for created_directory in reversed(missing_directories):
+            sync_parent_directory(created_directory)
     return data_directory

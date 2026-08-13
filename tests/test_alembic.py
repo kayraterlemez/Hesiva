@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 import pytest
@@ -47,6 +48,19 @@ def test_alembic_environment_uses_src_layout_and_temporary_database(tmp_path: Pa
     command.upgrade(alembic_config, "head")
 
     assert database_path.is_file()
+
+
+def test_alembic_configuration_does_not_disable_existing_application_loggers(
+    tmp_path: Path,
+) -> None:
+    sentinel_logger = logging.getLogger("hesiva.test.migration-sentinel")
+    previous_disabled = sentinel_logger.disabled
+    sentinel_logger.disabled = False
+    try:
+        command.upgrade(create_alembic_config(tmp_path / "logger.db"), "head")
+        assert not sentinel_logger.disabled
+    finally:
+        sentinel_logger.disabled = previous_disabled
 
 
 def test_initial_migration_creates_expected_schema_and_enforces_check(tmp_path: Path) -> None:

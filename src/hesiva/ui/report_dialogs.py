@@ -38,6 +38,20 @@ from hesiva.ui.presentation import (
 LOGGER = logging.getLogger(__name__)
 
 
+def _log_failure(message: str, error: BaseException) -> None:
+    """Log diagnostics without serializing paths, SQL parameters, or user data."""
+    LOGGER.error("%s: %s", message, type(error).__name__)
+
+
+def _set_error_message_state(label: QLabel, enabled: bool) -> None:
+    """Apply a dynamic error property immediately in Qt's stylesheet engine."""
+    label.setProperty("errorMessage", enabled)
+    style = label.style()
+    style.unpolish(label)
+    style.polish(label)
+    label.update()
+
+
 def _to_qdate(value: date) -> QDate:
     return QDate(value.year, value.month, value.day)
 
@@ -79,15 +93,19 @@ def _create_close_footer(
     footer.addStretch()
     print_button = QPushButton("Yazdır", dialog)
     print_button.setObjectName("reportPrintButton")
+    print_button.setAutoDefault(False)
     print_button.setEnabled(False)
     footer.addWidget(print_button)
     pdf_button = QPushButton("PDF Olarak Kaydet", dialog)
     pdf_button.setObjectName("reportPdfButton")
+    pdf_button.setAutoDefault(False)
     pdf_button.setEnabled(False)
     footer.addWidget(pdf_button)
     close_button = QPushButton("Kapat", dialog)
     close_button.setObjectName("reportCloseButton")
     close_button.setProperty("primary", True)
+    close_button.setAutoDefault(False)
+    close_button.setDefault(False)
     close_button.clicked.connect(dialog.accept)
     footer.addWidget(close_button)
     return footer, print_button, pdf_button
@@ -102,10 +120,22 @@ def _save_report(parent: QDialog, report: report_output.ReportData) -> None:
     )
     if not selected_path:
         return
+    selected_output_path = Path(selected_path)
+    final_output_path = report_output.ensure_pdf_extension(selected_output_path)
+    if final_output_path != selected_output_path and final_output_path.exists():
+        answer = QMessageBox.question(
+            parent,
+            "Dosyanın Üzerine Yazılsın mı?",
+            "Aynı adlı PDF dosyası zaten var. Üzerine yazmak istiyor musunuz?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
     try:
-        report_output.write_report_pdf(report, Path(selected_path))
-    except report_output.ReportOutputError:
-        LOGGER.exception("Report PDF output failed")
+        report_output.write_report_pdf(report, final_output_path)
+    except report_output.ReportOutputError as error:
+        _log_failure("Report PDF output failed", error)
         QMessageBox.warning(
             parent,
             "PDF Kaydedilemedi",
@@ -116,8 +146,8 @@ def _save_report(parent: QDialog, report: report_output.ReportData) -> None:
 def _print_report(parent: QDialog, report: report_output.ReportData) -> None:
     try:
         report_output.print_report(report, parent)
-    except report_output.ReportOutputError:
-        LOGGER.exception("Report print output failed")
+    except report_output.ReportOutputError as error:
+        _log_failure("Report print output failed", error)
         QMessageBox.warning(
             parent,
             "Yazdırma Başarısız",
@@ -220,8 +250,8 @@ class CustomerStatementDialog(QDialog):
         footer, self.print_button, self.pdf_button = _create_close_footer(self)
         layout.addLayout(footer)
 
-        self.period_start_input.editingFinished.connect(self.refresh_statement)
-        self.period_end_input.editingFinished.connect(self.refresh_statement)
+        self.period_start_input.dateChanged.connect(self.refresh_statement)
+        self.period_end_input.dateChanged.connect(self.refresh_statement)
         self.print_button.clicked.connect(self._print_current_report)
         self.pdf_button.clicked.connect(self._save_current_report)
         self.refresh_statement()
@@ -244,14 +274,15 @@ class CustomerStatementDialog(QDialog):
         except (ServiceError, ValidationError):
             self._show_error("Hesap özeti yüklenemedi. Lütfen yeniden deneyin.")
             return
-        except Exception:
-            LOGGER.exception("Customer statement could not be loaded")
+        except Exception as error:
+            _log_failure("Customer statement could not be loaded", error)
             self._show_error("Hesap özeti yüklenemedi. Lütfen yeniden deneyin.")
             return
         self.statement = statement
         self._populate(statement)
 
     def _populate(self, statement: CustomerStatement) -> None:
+        _set_error_message_state(self.state_label, False)
         self.customer_name_label.setText(statement.full_name)
         self.customer_phone_label.setText(f"Telefon: {statement.phone or '-'}")
         self.total_debt_label.setText(format_money_kurus(statement.total_debt_kurus))
@@ -280,7 +311,6 @@ class CustomerStatementDialog(QDialog):
             self.state_label.hide()
             self.table.show()
         else:
-            self.state_label.setProperty("errorMessage", False)
             self.state_label.setText("Seçilen tarih aralığında hesap hareketi bulunmuyor.")
             self.state_label.show()
             self.table.hide()
@@ -289,11 +319,9 @@ class CustomerStatementDialog(QDialog):
     def _show_error(self, message: str) -> None:
         self.statement = None
         self.table.hide()
-        self.state_label.setProperty("errorMessage", True)
+        _set_error_message_state(self.state_label, True)
         self.state_label.setText(message)
         self.state_label.show()
-        self.state_label.style().unpolish(self.state_label)
-        self.state_label.style().polish(self.state_label)
 
     def _save_current_report(self) -> None:
         if self.statement is not None:
@@ -381,17 +409,17 @@ class MonthlySummaryDialog(QDialog):
                     year=self.year_input.value(),
                     month=int(self.month_input.currentData()),
                 )
-        except Exception:
-            LOGGER.exception("Monthly summary could not be loaded")
+        except Exception as error:
+            _log_failure("Monthly summary could not be loaded", error)
             self.summary = None
-            self.state_label.setProperty("errorMessage", True)
+            _set_error_message_state(self.state_label, True)
             self.state_label.setText("Aylık özet yüklenemedi. Lütfen yeniden deneyin.")
             return
         self.summary = summary
         self.debt_label.setText(format_money_kurus(summary.debt_kurus))
         self.payment_label.setText(format_money_kurus(summary.payment_kurus))
         self.net_label.setText(format_signed_money_kurus(summary.net_kurus))
-        self.state_label.setProperty("errorMessage", False)
+        _set_error_message_state(self.state_label, False)
         self.state_label.setText(
             "Seçilen ayda finansal hareket bulunmuyor."
             if summary.debt_kurus == summary.payment_kurus == 0
@@ -483,11 +511,11 @@ class YearlySummaryDialog(QDialog):
         try:
             with self._application_context.services() as services:
                 summary = services.report.get_yearly_summary(year=self.year_input.value())
-        except Exception:
-            LOGGER.exception("Yearly summary could not be loaded")
+        except Exception as error:
+            _log_failure("Yearly summary could not be loaded", error)
             self.summary = None
             self.table.hide()
-            self.state_label.setProperty("errorMessage", True)
+            _set_error_message_state(self.state_label, True)
             self.state_label.setText("Yıllık özet yüklenemedi. Lütfen yeniden deneyin.")
             return
         self.summary = summary
@@ -507,7 +535,7 @@ class YearlySummaryDialog(QDialog):
                 row_index, 3, _money_item(format_signed_money_kurus(month.net_kurus))
             )
         self.table.show()
-        self.state_label.setProperty("errorMessage", False)
+        _set_error_message_state(self.state_label, False)
         self.state_label.setText(
             "Seçilen yılda finansal hareket bulunmuyor."
             if summary.debt_kurus == summary.payment_kurus == 0

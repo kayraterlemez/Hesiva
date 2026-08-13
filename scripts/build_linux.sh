@@ -10,13 +10,26 @@ if [[ ! -x "$hesiva_python" ]]; then
     exit 1
 fi
 
-if [[ "${1:-}" != "--build-only" ]]; then
+build_only=false
+if [[ "$#" -eq 1 && "$1" == "--build-only" ]]; then
+    build_only=true
+elif [[ "$#" -ne 0 ]]; then
+    echo "Kullanım: scripts/build_linux.sh [--build-only]" >&2
+    exit 2
+fi
+
+if [[ "$build_only" == false ]]; then
     "$hesiva_python" -m pytest
     "$hesiva_python" -m ruff check .
     "$hesiva_python" -m ruff format --check .
     git diff --check
 fi
 
+"$hesiva_python" packaging/artifact_provenance.py invalidate
+source_digest="$("$hesiva_python" packaging/artifact_provenance.py source-digest)"
 "$hesiva_python" -m PyInstaller --clean --noconfirm packaging/Hesiva.spec
+"$hesiva_python" packaging/artifact_provenance.py record \
+    --expected-source-sha256 "$source_digest"
+"$hesiva_python" packaging/artifact_provenance.py verify
 
 echo "Linux onedir artifact: $repository_root/dist/Hesiva"

@@ -179,6 +179,10 @@ Tasks:
 - Customer reminder indicator
 - Reminder tests
 
+The Version 1 startup check is implemented as one application-wide overdue/today summary after the
+authenticated Main Window is available. It reuses the customer-scoped reminder tab and is not
+re-shown by the midnight presentation refresh.
+
 Expected result:
 
 Users can track future payment promises without external tools.
@@ -236,8 +240,11 @@ Expected result:
 The application can create verified backups and successfully restore them without relying on raw copies of an active SQLite database.
 
 The manual V1 workflow uses verified ZIP archives containing an Online Backup API database
-snapshot and performs atomic replacement with a pre-restore safety backup. Automatic scheduling
-and retention remain separate follow-up work within this phase.
+snapshot and performs recoverable pairwise replacement with a pre-restore safety backup. The
+critical automatic-backup requirement is also complete: authenticated startup performs a
+once-per-run daily check against the controlled local backup directory, creates no more than one
+successful normal automatic backup per local date, and retains 30 calendar days without touching
+manual or restore-safety archives.
 
 ---
 

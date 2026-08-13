@@ -6,9 +6,12 @@ from pathlib import Path
 
 from PySide6.QtCore import QMarginsF
 from PySide6.QtGui import QFont, QPageLayout, QPageSize, QTextDocument
+from PySide6.QtPdf import QPdfDocument
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import QDialog, QWidget
+from shiboken6 import delete as delete_qt_object
 
+from hesiva.database.durability import sync_file, sync_parent_directory
 from hesiva.read_models import CustomerStatement, MonthlySummary, YearlySummary
 from hesiva.ui.presentation import (
     TURKISH_MONTH_NAMES,
@@ -81,7 +84,8 @@ h2 {
 }
 .number {
     text-align: right;
-    white-space: nowrap;
+    white-space: normal;
+    font-size: 8pt;
 }
 .description {
     white-space: normal;
@@ -133,39 +137,66 @@ def write_report_pdf(report: ReportData, output_path: Path) -> Path:
     os.close(descriptor)
     temporary_path = Path(temporary_name)
     try:
-        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
-        _configure_a4_printer(printer)
-        printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
-        printer.setOutputFileName(str(temporary_path))
-        printer.setDocName(_report_title(report))
-        _render_to_printer(report, printer)
+        _render_pdf_to_path(report, temporary_path)
+        sync_file(temporary_path)
         if not _is_complete_pdf(temporary_path):
             raise ReportOutputError("The PDF output was not completed.")
         os.replace(temporary_path, target)
-    except ReportOutputError:
-        temporary_path.unlink(missing_ok=True)
+        sync_parent_directory(target)
+    except ReportOutputError as error:
+        _remove_temporary_pdf(temporary_path, primary_error=error)
         raise
     except Exception as error:
-        temporary_path.unlink(missing_ok=True)
-        raise ReportOutputError("The PDF output could not be written.") from error
+        report_error = ReportOutputError("The PDF output could not be written.")
+        _remove_temporary_pdf(temporary_path, primary_error=report_error)
+        raise report_error from error
     return target
 
 
 def print_report(report: ReportData, parent: QWidget | None = None) -> bool:
     """Show the native Qt print dialog and print the shared report document if accepted."""
     printer = QPrinter(QPrinter.PrinterMode.HighResolution)
-    _configure_a4_printer(printer)
-    printer.setDocName(_report_title(report))
-    dialog = QPrintDialog(printer, parent)
-    if dialog.exec() != QDialog.DialogCode.Accepted:
-        return False
+    dialog: QPrintDialog | None = None
+    primary_error: BaseException | None = None
     try:
+        _configure_a4_printer(printer)
+        printer.setDocName(_report_title(report))
+        dialog = QPrintDialog(printer, parent)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
         _render_to_printer(report, printer)
+        if printer.printerState() in {
+            QPrinter.PrinterState.Aborted,
+            QPrinter.PrinterState.Error,
+        }:
+            raise ReportOutputError("The printer did not complete the output.")
+        return True
+    except ReportOutputError as error:
+        primary_error = error
+        raise
     except Exception as error:
-        raise ReportOutputError("The report could not be printed.") from error
-    if printer.printerState() == QPrinter.PrinterState.Error:
-        raise ReportOutputError("The printer reported an output error.")
-    return True
+        output_error = ReportOutputError("The report could not be printed.")
+        primary_error = output_error
+        raise output_error from error
+    finally:
+        for qt_object, description in (
+            (dialog, "print dialog"),
+            (printer, "printer output device"),
+        ):
+            if qt_object is None:
+                continue
+            try:
+                delete_qt_object(qt_object)
+            except Exception as cleanup_error:
+                if primary_error is not None:
+                    primary_error.add_note(
+                        f"The Qt {description} could not be released cleanly: "
+                        f"{type(cleanup_error).__name__}."
+                    )
+                    continue
+                raise ReportOutputError(
+                    f"The Qt {description} could not be released cleanly."
+                ) from cleanup_error
 
 
 def ensure_pdf_extension(path: Path) -> Path:
@@ -204,6 +235,30 @@ def _render_to_printer(report: ReportData, printer: QPrinter) -> None:
     document.print_(printer)
 
 
+def _render_pdf_to_path(report: ReportData, path: Path) -> None:
+    printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+    primary_error: BaseException | None = None
+    try:
+        _configure_a4_printer(printer)
+        printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
+        printer.setOutputFileName(str(path))
+        printer.setDocName(_report_title(report))
+        _render_to_printer(report, printer)
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        try:
+            delete_qt_object(printer)
+        except Exception as cleanup_error:
+            if primary_error is None:
+                raise
+            primary_error.add_note(
+                "The Qt PDF output device could not be released cleanly: "
+                f"{type(cleanup_error).__name__}."
+            )
+
+
 def _configure_a4_printer(printer: QPrinter) -> None:
     printer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
     printer.setPageOrientation(QPageLayout.Orientation.Portrait)
@@ -228,8 +283,8 @@ def _customer_statement_html(report: CustomerStatement) -> str:
         else (
             "<table class='report-table'>"
             "<thead><tr>"
-            "<th width='13%'>Tarih</th><th width='39%'>Açıklama</th>"
-            "<th width='15%'>Borç</th><th width='15%'>Ödeme</th><th width='18%'>Bakiye</th>"
+            "<th width='13%'>Tarih</th><th width='31%'>Açıklama</th>"
+            "<th width='17%'>Borç</th><th width='17%'>Ödeme</th><th width='22%'>Bakiye</th>"
             "</tr></thead><tbody>"
             f"{rows}</tbody></table>"
         )
@@ -316,10 +371,23 @@ def _escape(value: str) -> str:
 
 
 def _is_complete_pdf(path: Path) -> bool:
+    document: QPdfDocument | None = None
     try:
         if path.stat().st_size < 8:
             return False
-        with path.open("rb") as report_file:
-            return report_file.read(5) == b"%PDF-"
-    except OSError:
+        document = QPdfDocument()
+        return document.load(str(path)) == QPdfDocument.Error.None_ and document.pageCount() > 0
+    except (OSError, RuntimeError):
         return False
+    finally:
+        if document is not None:
+            document.close()
+
+
+def _remove_temporary_pdf(path: Path, *, primary_error: BaseException) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as cleanup_error:
+        primary_error.add_note(
+            f"The incomplete temporary PDF could not be removed: {type(cleanup_error).__name__}."
+        )

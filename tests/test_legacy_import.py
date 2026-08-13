@@ -1,13 +1,20 @@
 import hashlib
+import os
+import sqlite3
 from collections.abc import Iterator
+from contextlib import closing
 from datetime import date, time
 from pathlib import Path
 
 import pytest
 from sqlalchemy import func, select
 
+from hesiva import data_limits
 from hesiva.application import create_application_context
 from hesiva.composition import ApplicationContext
+from hesiva.financial_integrity import SQLITE_SIGNED_INTEGER_MAX
+from hesiva.importers import exa as exa_module
+from hesiva.importers import veresiye5_reader as reader_module
 from hesiva.importers.exa import ExaFormatError, recover_frm1_database
 from hesiva.importers.veresiye5_reader import LegacySourceError, read_legacy_import_plan
 from hesiva.models import Customer, Transaction
@@ -24,6 +31,7 @@ from legacy_import_fixtures import (
     create_default_source,
     create_legacy_edb,
 )
+import legacy_import_fixtures as fixture_module
 
 
 @pytest.fixture
@@ -50,6 +58,53 @@ def test_supported_exa_recovers_exact_frm1_without_changing_source(tmp_path: Pat
     assert not list(source.parent.glob("*.exa-wal"))
     assert not list(source.parent.glob("*.exa-shm"))
     assert not list(source.parent.glob("*.exa-journal"))
+
+
+def test_oversized_exa_is_rejected_before_hashing_or_parsing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = create_default_source(tmp_path / "oversized.exa")
+    monkeypatch.setattr(reader_module, "EXA_SOURCE_SIZE_LIMIT", source.stat().st_size - 1)
+
+    def unexpected_operation(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("An oversized EXA must not be hashed or parsed.")
+
+    monkeypatch.setattr(reader_module, "_source_digest", unexpected_operation)
+    monkeypatch.setattr(reader_module, "recover_frm1_database", unexpected_operation)
+
+    with pytest.raises(LegacySourceError, match="EXA source exceeds"):
+        read_legacy_import_plan(source)
+
+
+def test_exa_size_is_rechecked_before_the_final_digest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = create_default_source(tmp_path / "growing.exa")
+    monkeypatch.setattr(reader_module, "EXA_SOURCE_SIZE_LIMIT", source.stat().st_size)
+    real_read_database = reader_module._read_database
+    real_source_digest = reader_module._source_digest
+    digest_calls = 0
+
+    def count_digest(path: Path, *, size_limit: int | None = None) -> str:
+        nonlocal digest_calls
+        digest_calls += 1
+        return real_source_digest(path, size_limit=size_limit)
+
+    def read_then_grow_source(database_path: Path, source_sha256: str):
+        plan = real_read_database(database_path, source_sha256)
+        with source.open("ab") as source_handle:
+            source_handle.write(b"x")
+        return plan
+
+    monkeypatch.setattr(reader_module, "_source_digest", count_digest)
+    monkeypatch.setattr(reader_module, "_read_database", read_then_grow_source)
+
+    with pytest.raises(LegacySourceError, match="EXA source exceeds"):
+        read_legacy_import_plan(source)
+
+    assert digest_calls == 1
 
 
 @pytest.mark.parametrize("kind", ["missing", "random", "truncated_header"])
@@ -98,6 +153,107 @@ def test_exa_rejects_invalid_file_list_and_missing_or_duplicate_frm1(tmp_path: P
     assert not (extraction / "Frm1.edb").exists()
 
 
+def test_exa_fdopen_failure_closes_descriptor_before_target_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = create_default_source(tmp_path / "fdopen-failure.exa")
+    extraction = tmp_path / "private"
+    extraction.mkdir()
+    target = extraction / "Frm1.edb"
+    real_open = os.open
+    real_unlink = Path.unlink
+    captured_descriptor: int | None = None
+    descriptor_was_closed_before_unlink = False
+
+    def capture_open(path: object, flags: int, mode: int = 0o777) -> int:
+        nonlocal captured_descriptor
+        descriptor = real_open(path, flags, mode)
+        if Path(path) == target:
+            captured_descriptor = descriptor
+        return descriptor
+
+    def fail_fdopen(_descriptor: int, _mode: str):
+        raise OSError("synthetic fdopen failure")
+
+    def observe_unlink(path: Path, *, missing_ok: bool = False) -> None:
+        nonlocal descriptor_was_closed_before_unlink
+        if path == target:
+            assert captured_descriptor is not None
+            with pytest.raises(OSError):
+                os.fstat(captured_descriptor)
+            descriptor_was_closed_before_unlink = True
+        real_unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(exa_module.os, "open", capture_open)
+    monkeypatch.setattr(exa_module.os, "fdopen", fail_fdopen)
+    monkeypatch.setattr(Path, "unlink", observe_unlink)
+
+    with pytest.raises(ExaFormatError, match="read safely"):
+        recover_frm1_database(source, extraction)
+
+    assert descriptor_was_closed_before_unlink
+    assert not target.exists()
+
+
+def test_exa_cleanup_failure_preserves_primary_format_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "invalid-trailing.exa"
+    payload = b"SQLite format 3\x00synthetic"
+    build_exa(
+        source,
+        ((b"C:\\Synthetic\\Frm1.edb", payload),),
+        trailing=b"unexpected",
+    )
+    extraction = tmp_path / "private"
+    extraction.mkdir()
+    target = extraction / "Frm1.edb"
+    real_unlink = Path.unlink
+
+    def fail_target_unlink(path: Path, *, missing_ok: bool = False) -> None:
+        if path == target:
+            raise PermissionError("synthetic cleanup failure")
+        real_unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", fail_target_unlink)
+
+    with pytest.raises(ExaFormatError, match="unexpected trailing") as captured:
+        recover_frm1_database(source, extraction)
+
+    assert any("PermissionError" in note for note in captured.value.__notes__)
+    assert target.exists()
+
+
+def test_exa_private_directory_cleanup_failure_cannot_be_reported_as_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = create_default_source(tmp_path / "cleanup-failure.exa")
+    extraction = tmp_path / "private-cleanup-failure"
+
+    class FailingTemporaryDirectory:
+        def __init__(self, *, prefix: str) -> None:
+            del prefix
+            extraction.mkdir()
+            self.name = str(extraction)
+
+        def cleanup(self) -> None:
+            raise PermissionError("synthetic private cleanup failure")
+
+    monkeypatch.setattr(
+        reader_module.tempfile,
+        "TemporaryDirectory",
+        FailingTemporaryDirectory,
+    )
+
+    with pytest.raises(LegacySourceError, match="Private legacy-import data"):
+        read_legacy_import_plan(source)
+
+    assert (extraction / "Frm1.edb").is_file()
+
+
 @pytest.mark.parametrize(
     ("modifier", "build_options"),
     [
@@ -129,6 +285,102 @@ def test_exa_rejects_bad_markers_flags_lengths_compression_and_trailing_data(
 
     with pytest.raises(ExaFormatError):
         recover_frm1_database(source, extraction)
+    assert not (extraction / "Frm1.edb").exists()
+
+
+def test_exa_rejects_aggregate_declared_member_size_before_extraction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "aggregate-size.exa"
+    payload = b"SQLite format 3\x00" + bytes(32)
+    build_exa(
+        source,
+        (
+            (b"C:\\Synthetic\\Frm1.edb", payload),
+            (b"C:\\Synthetic\\Other.edb", payload),
+        ),
+    )
+    extraction = tmp_path / "private"
+    extraction.mkdir()
+    monkeypatch.setattr(exa_module, "AGGREGATE_MEMBER_SIZE_LIMIT", len(payload) * 2 - 1)
+
+    with pytest.raises(ExaFormatError, match="aggregate member-size"):
+        recover_frm1_database(source, extraction)
+
+    assert not (extraction / "Frm1.edb").exists()
+
+
+def test_exa_rejects_pathological_declared_size_as_domain_error_without_source_change(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "pathological-declared-size.exa"
+    payload = b"SQLite format 3\x00" + bytes(32)
+    file_list = b"C:\\Synthetic\\Frm1.edb\t0=" + (b"9" * 5_000)
+    build_exa(
+        source,
+        ((b"C:\\Synthetic\\Frm1.edb", payload),),
+        file_list_payload=file_list,
+    )
+    source_digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    extraction = tmp_path / "private-pathological-size"
+    extraction.mkdir()
+
+    with pytest.raises(ExaFormatError, match="unsupported member size"):
+        recover_frm1_database(source, extraction)
+    with pytest.raises(LegacySourceError, match="unsupported member size"):
+        read_legacy_import_plan(source)
+
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == source_digest
+    assert not (extraction / "Frm1.edb").exists()
+    assert not list(source.parent.glob(f"{source.name}-*"))
+
+
+def test_exa_rejects_a_single_record_that_expands_beyond_chunk_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "expanded-chunk.exa"
+    payload = b"SQLite format 3\x00" + bytes(256)
+    build_exa(
+        source,
+        ((b"C:\\Synthetic\\Frm1.edb", payload),),
+        chunk_size=len(payload),
+    )
+    extraction = tmp_path / "private"
+    extraction.mkdir()
+    monkeypatch.setattr(exa_module, "DECOMPRESSED_CHUNK_LIMIT", len(payload) - 1)
+
+    with pytest.raises(ExaFormatError, match="compressed record exceeds"):
+        recover_frm1_database(source, extraction)
+
+    assert not (extraction / "Frm1.edb").exists()
+
+
+@pytest.mark.parametrize(
+    ("limit_name", "limit", "message"),
+    [
+        ("AGGREGATE_COMPRESSED_SIZE_LIMIT", 1, "aggregate compressed-size"),
+        ("COMPRESSED_RECORD_COUNT_LIMIT", 1, "too many compressed records"),
+    ],
+)
+def test_exa_bounds_aggregate_compressed_input_and_record_count(
+    limit_name: str,
+    limit: int,
+    message: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / f"{limit_name}.exa"
+    payload = b"SQLite format 3\x00" + bytes(256)
+    build_exa(source, ((b"C:\\Synthetic\\Frm1.edb", payload),), chunk_size=32)
+    extraction = tmp_path / "private"
+    extraction.mkdir()
+    monkeypatch.setattr(exa_module, limit_name, limit)
+
+    with pytest.raises(ExaFormatError, match=message):
+        recover_frm1_database(source, extraction)
+
     assert not (extraction / "Frm1.edb").exists()
 
 
@@ -173,6 +425,338 @@ def test_direct_edb_is_read_immutable_and_creates_no_sqlite_sidecars(tmp_path: P
     assert plan.preflight.eligible_customer_count == 2
     assert hashlib.sha256(source.read_bytes()).hexdigest() == digest
     assert not list(tmp_path.glob("source.edb-*"))
+
+
+@pytest.mark.parametrize("sidecar_suffix", ["-wal", "-shm", "-journal"])
+def test_direct_edb_rejects_preexisting_sqlite_sidecars(
+    sidecar_suffix: str,
+    tmp_path: Path,
+) -> None:
+    source = create_default_source(tmp_path / "source.edb", as_exa=False)
+    sidecar = Path(f"{source}{sidecar_suffix}")
+    sidecar.write_bytes(b"preserve this ambiguous sidecar")
+
+    with pytest.raises(LegacySourceError, match="no SQLite sidecar"):
+        read_legacy_import_plan(source)
+
+    assert sidecar.read_bytes() == b"preserve this ambiguous sidecar"
+
+
+def test_direct_edb_symlink_rejects_sidecars_next_to_resolved_database(tmp_path: Path) -> None:
+    source = create_default_source(tmp_path / "source.edb", as_exa=False)
+    alias = tmp_path / "alias.edb"
+    try:
+        alias.symlink_to(source)
+    except OSError as error:
+        pytest.skip(f"Symlinks are unavailable: {error}")
+    Path(f"{source}-journal").write_bytes(b"ambiguous target sidecar")
+
+    with pytest.raises(LegacySourceError, match="no SQLite sidecar"):
+        read_legacy_import_plan(alias)
+
+
+def test_direct_edb_rejects_hardlink_alias_that_can_hide_a_committed_wal(
+    tmp_path: Path,
+) -> None:
+    source = create_default_source(tmp_path / "source.edb", as_exa=False)
+    alias = tmp_path / "hardlink-alias.edb"
+    try:
+        os.link(source, alias)
+    except OSError as error:
+        pytest.skip(f"Hard links are unavailable: {error}")
+
+    with closing(sqlite3.connect(source)) as writer:
+        assert writer.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        writer.execute(
+            "INSERT INTO ATemp (TurID, Aciklama) VALUES (?, CAST(? AS TEXT))",
+            (2, sqlite3.Binary("WAL satırı".encode("cp1254"))),
+        )
+        writer.commit()
+        assert Path(f"{source}-wal").is_file()
+        assert not Path(f"{alias}-wal").exists()
+
+        with pytest.raises(LegacySourceError, match="without hard-link aliases"):
+            read_legacy_import_plan(alias)
+
+
+def test_direct_edb_rejects_a_real_committed_wal_source(tmp_path: Path) -> None:
+    source = create_default_source(tmp_path / "source.edb", as_exa=False)
+
+    with closing(sqlite3.connect(source)) as writer:
+        assert writer.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        writer.execute(
+            "INSERT INTO ATemp (TurID, Aciklama) VALUES (?, CAST(? AS TEXT))",
+            (2, sqlite3.Binary("WAL satırı".encode("cp1254"))),
+        )
+        writer.commit()
+        assert Path(f"{source}-wal").is_file()
+
+        with pytest.raises(LegacySourceError, match="no SQLite sidecar"):
+            read_legacy_import_plan(source)
+
+
+def test_direct_edb_rechecks_sidecars_after_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = create_default_source(tmp_path / "source.edb", as_exa=False)
+    original_read_database = reader_module._read_database
+
+    def read_then_create_sidecar(database_path: Path, source_sha256: str):
+        plan = original_read_database(database_path, source_sha256)
+        Path(f"{database_path}-journal").write_bytes(b"appeared during read")
+        return plan
+
+    monkeypatch.setattr(reader_module, "_read_database", read_then_create_sidecar)
+
+    with pytest.raises(LegacySourceError, match="no SQLite sidecar"):
+        read_legacy_import_plan(source)
+
+
+def test_legacy_reader_explicitly_closes_connections_on_success_and_rejection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    valid = create_default_source(tmp_path / "valid.edb", as_exa=False)
+    invalid = tmp_path / "invalid.edb"
+    create_legacy_edb(
+        invalid,
+        customers=(),
+        transactions=(),
+        schema_override="CREATE TABLE CariKart (ID INTEGER PRIMARY KEY);",
+    )
+    real_connect = sqlite3.connect
+    opened: list[sqlite3.Connection] = []
+    closed: list[sqlite3.Connection] = []
+
+    class TrackingConnection(sqlite3.Connection):
+        def close(self) -> None:
+            closed.append(self)
+            super().close()
+
+    def tracking_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+        kwargs["factory"] = TrackingConnection
+        connection = real_connect(*args, **kwargs)
+        opened.append(connection)
+        return connection
+
+    monkeypatch.setattr(reader_module.sqlite3, "connect", tracking_connect)
+
+    read_legacy_import_plan(valid)
+    with pytest.raises(LegacySourceError, match="schema"):
+        read_legacy_import_plan(invalid)
+
+    assert len(opened) == 2
+    assert closed == opened
+
+
+def test_legacy_fixture_explicitly_closes_its_connection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_connect = sqlite3.connect
+    opened: list[sqlite3.Connection] = []
+    closed: list[sqlite3.Connection] = []
+
+    class TrackingConnection(sqlite3.Connection):
+        def close(self) -> None:
+            closed.append(self)
+            super().close()
+
+    def tracking_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+        kwargs["factory"] = TrackingConnection
+        connection = real_connect(*args, **kwargs)
+        opened.append(connection)
+        return connection
+
+    monkeypatch.setattr(fixture_module.sqlite3, "connect", tracking_connect)
+
+    create_legacy_edb(
+        tmp_path / "fixture.edb",
+        customers=(LegacyCustomerFixture(1, "Müşteri"),),
+        transactions=(),
+    )
+
+    assert len(opened) == 1
+    assert closed == opened
+
+
+def test_direct_edb_size_is_bounded_before_hashing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = create_default_source(tmp_path / "source.edb", as_exa=False)
+    monkeypatch.setattr(reader_module, "LEGACY_DATABASE_SIZE_LIMIT", source.stat().st_size - 1)
+
+    def unexpected_digest(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("An oversized direct database must not be hashed.")
+
+    monkeypatch.setattr(reader_module, "_source_digest", unexpected_digest)
+
+    with pytest.raises(LegacySourceError, match="size limit"):
+        read_legacy_import_plan(source)
+
+
+def test_legacy_database_row_count_is_bounded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = create_default_source(tmp_path / "source.edb", as_exa=False)
+    monkeypatch.setattr(reader_module, "LEGACY_ROW_COUNT_LIMIT", 7)
+
+    with pytest.raises(LegacySourceError, match="row-count limit"):
+        read_legacy_import_plan(source)
+
+
+def test_legacy_text_cell_and_aggregate_sizes_are_bounded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = create_default_source(tmp_path / "source.edb", as_exa=False)
+
+    monkeypatch.setattr(reader_module, "LEGACY_TEXT_CELL_SIZE_LIMIT", 1)
+    with pytest.raises(LegacySourceError, match="text value"):
+        read_legacy_import_plan(source)
+
+    monkeypatch.setattr(reader_module, "LEGACY_TEXT_CELL_SIZE_LIMIT", 16 * 1024 * 1024)
+    monkeypatch.setattr(reader_module, "LEGACY_TEXT_AGGREGATE_SIZE_LIMIT", 1)
+    with pytest.raises(LegacySourceError, match="aggregate supported size"):
+        read_legacy_import_plan(source)
+
+
+def test_sqlite_length_limit_rejects_oversized_legacy_text_before_materialization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cell_limit = 4 * 1024
+    source = tmp_path / "oversized-cell.edb"
+    create_legacy_edb(
+        source,
+        customers=(LegacyCustomerFixture(1, "x" * (cell_limit * 2)),),
+        transactions=(),
+    )
+    source_digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    real_consume = reader_module._TextBudget.consume
+
+    def reject_materialized_oversized_value(
+        budget: reader_module._TextBudget,
+        value: object,
+        field_name: str,
+    ) -> None:
+        if isinstance(value, bytes) and len(value) > cell_limit:
+            raise AssertionError("oversized legacy text reached Python")
+        real_consume(budget, value, field_name)
+
+    monkeypatch.setattr(reader_module, "LEGACY_TEXT_CELL_SIZE_LIMIT", cell_limit)
+    monkeypatch.setattr(
+        reader_module._TextBudget,
+        "consume",
+        reject_materialized_oversized_value,
+    )
+
+    with pytest.raises(LegacySourceError, match="text value exceeds"):
+        read_legacy_import_plan(source)
+
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == source_digest
+    assert not list(source.parent.glob(f"{source.name}-*"))
+
+
+@pytest.mark.parametrize(
+    "mapped_field",
+    ("full_name", "phone", "address", "notes", "transaction_description"),
+)
+def test_legacy_mapped_text_obeys_destination_utf8_limit_before_import(
+    mapped_field: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    customer_values: dict[str, object] = {"legacy_id": 1, "full_name": "Ali"}
+    transactions: tuple[LegacyTransactionFixture, ...] = ()
+    if mapped_field == "full_name":
+        customer_values["full_name"] = "xxxxx"
+    elif mapped_field == "phone":
+        customer_values["gsm"] = "xxxxx"
+    elif mapped_field == "address":
+        customer_values["address"] = "ab"
+        customer_values["district"] = "cd"
+    elif mapped_field == "notes":
+        customer_values["notes"] = "xxxxx"
+    else:
+        transactions = (
+            LegacyTransactionFixture(
+                legacy_id=1,
+                customer_legacy_id=1,
+                transaction_date="2026-08-13",
+                transaction_time=None,
+                description="xxxxx",
+                debt=1,
+                payment=0,
+            ),
+        )
+    source = tmp_path / f"mapped-{mapped_field}.edb"
+    create_legacy_edb(
+        source,
+        customers=(LegacyCustomerFixture(**customer_values),),
+        transactions=transactions,
+    )
+    monkeypatch.setattr(data_limits, "PERSISTED_USER_TEXT_MAX_BYTES", 4)
+
+    with pytest.raises(LegacySourceError, match="UTF-8 text size limit"):
+        read_legacy_import_plan(source)
+
+
+def test_final_source_recheck_does_not_mask_primary_reader_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "invalid.edb"
+    create_legacy_edb(
+        source,
+        customers=(),
+        transactions=(),
+        schema_override="CREATE TABLE CariKart (ID INTEGER PRIMARY KEY);",
+    )
+    original_digest = reader_module._source_digest
+    digest_calls = 0
+
+    def fail_final_digest(path: Path, *, size_limit: int | None = None) -> str:
+        nonlocal digest_calls
+        digest_calls += 1
+        if digest_calls == 2:
+            raise LegacySourceError("synthetic final source recheck failure")
+        return original_digest(path, size_limit=size_limit)
+
+    monkeypatch.setattr(reader_module, "_source_digest", fail_final_digest)
+
+    with pytest.raises(LegacySourceError, match="schema"):
+        read_legacy_import_plan(source)
+
+    assert digest_calls == 2
+
+
+def test_final_source_recheck_failure_remains_blocking_after_successful_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = create_default_source(tmp_path / "source.edb", as_exa=False)
+    original_digest = reader_module._source_digest
+    digest_calls = 0
+
+    def fail_final_digest(path: Path, *, size_limit: int | None = None) -> str:
+        nonlocal digest_calls
+        digest_calls += 1
+        if digest_calls == 2:
+            raise LegacySourceError("synthetic final source recheck failure")
+        return original_digest(path, size_limit=size_limit)
+
+    monkeypatch.setattr(reader_module, "_source_digest", fail_final_digest)
+
+    with pytest.raises(LegacySourceError, match="final source recheck failure"):
+        read_legacy_import_plan(source)
+
+    assert digest_calls == 2
 
 
 def test_all_turkish_cp1254_letters_round_trip_to_destination_unicode(
@@ -301,6 +885,71 @@ def test_supported_integer_and_real_money_converts_exactly_to_kurus(
     plan = read_legacy_import_plan(source)
 
     assert plan.transactions[0].amount_kurus == expected_kurus
+
+
+@pytest.mark.parametrize(
+    ("debt", "payment"),
+    [
+        (SQLITE_SIGNED_INTEGER_MAX // 100 + 1, None),
+        (None, SQLITE_SIGNED_INTEGER_MAX // 100 + 1),
+    ],
+)
+def test_legacy_preflight_rejects_individual_amount_outside_exact_kurus_range(
+    debt: int | None,
+    payment: int | None,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "individual-overflow.edb"
+    create_legacy_edb(
+        source,
+        customers=(LegacyCustomerFixture(1, "Müşteri"),),
+        transactions=(
+            LegacyTransactionFixture(
+                1,
+                1,
+                "2024-01-01",
+                None,
+                "İşlem",
+                debt,
+                payment,
+            ),
+        ),
+    )
+
+    with pytest.raises(LegacySourceError, match="outside the supported exact financial range"):
+        read_legacy_import_plan(source)
+
+
+@pytest.mark.parametrize("side", ["debt", "payment"])
+def test_legacy_preflight_rejects_cumulative_same_side_overflow(
+    side: str,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / f"aggregate-{side}-overflow.edb"
+    nearly_maximum_lira = SQLITE_SIGNED_INTEGER_MAX // 100
+
+    def movement(
+        legacy_id: int,
+        magnitude_lira: int,
+    ) -> LegacyTransactionFixture:
+        return LegacyTransactionFixture(
+            legacy_id,
+            1,
+            "2024-01-01",
+            None,
+            "İşlem",
+            magnitude_lira if side == "debt" else None,
+            magnitude_lira if side == "payment" else None,
+        )
+
+    create_legacy_edb(
+        source,
+        customers=(LegacyCustomerFixture(1, "Müşteri"),),
+        transactions=(movement(1, nearly_maximum_lira), movement(2, 1)),
+    )
+
+    with pytest.raises(LegacySourceError, match="active financial totals exceed"):
+        read_legacy_import_plan(source)
 
 
 def test_zero_movement_row_skips_without_inventing_required_financial_fields(

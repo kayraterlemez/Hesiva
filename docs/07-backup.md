@@ -84,14 +84,18 @@ Verified backup completed
 
 Automatic backups should create useful recovery points without producing unnecessary copies on every application open/close.
 
-Recommended Version 1 policy:
+Version 1 policy:
 
-- At most one normal automatic backup per day when the application is used
-- Always create an appropriate recovery backup before a significant database migration
-- Create a recovery backup before legacy import when an existing database contains data
-- Create a recovery backup before restore
-
-Exact scheduling may be adjusted during implementation, but startup **and** shutdown backups on every run are not required.
+- After authentication/setup succeeds, startup checks the controlled local
+  `<application-data>/backups` directory once per application run.
+- At most one verified normal automatic backup is created per local calendar day.
+- Normal automatic names use `hesiva_auto_YYYY-MM-DD_HH-MM-SS.zip`, with a numeric no-clobber
+  suffix only when the exact timestamp name is already occupied.
+- The optional manual-backup destination is never used as an automatic fallback.
+- Failure is non-blocking, is not retried in the same run, and is reported after the Main Window is
+  available with a recommendation to create a manual backup.
+- Recovery backups before significant migration, legacy import, and restore remain separate safety
+  workflows.
 
 ---
 
@@ -163,6 +167,15 @@ hesiva_backup_2026-08-07_0105.zip
 A timestamp prevents accidental filename reuse.
 
 If an identical name already exists, the application must not silently overwrite the existing backup.
+Hesiva therefore creates the selected destination exclusively and streams the already verified
+archive into that new file. This portable no-clobber publication deliberately does not claim to be
+an atomic rename: a write failure or abrupt process termination can leave an incomplete file at the
+newly selected name. Such a file is never reported as a successful backup and normal validation
+rejects it; it never replaces a pre-existing backup.
+
+The live database, configuration, application lock, restore-recovery marker, and SQLite sidecar
+names in the application-data directory are reserved infrastructure paths and cannot be selected as
+manual backup destinations.
 
 ---
 
@@ -204,19 +217,19 @@ Only after verification succeeds should the UI display a successful-backup messa
 
 # Backup Retention
 
-The application should keep multiple backup generations.
+After a new automatic backup has been created and independently validated, Hesiva retains verified
+normal automatic backups for the most recent 30 local calendar days. Cleanup recognizes only the
+exact `hesiva_auto_...zip` namespace, rejects symlinks, validates each archive, and verifies that the
+candidate did not change during validation before deletion. The archive metadata creation instant
+must also match the local date/time encoded in the automatic filename, and multiply-linked files
+are treated as ambiguous. Corrupt, renamed, hard-linked, and otherwise ambiguous lookalikes are not
+deleted and cannot suppress that day's real automatic backup.
 
-A reasonable starting policy is:
-
-- 7 recent daily backups
-- 4 weekly backups
-- 12 monthly backups
-
-Retention must never delete the only known valid backup.
-
-Retention logic must operate only inside a configured Hesiva backup destination and must never delete unrelated files.
-
-External/manual backups may be excluded from automatic retention when appropriate.
+Manual `hesiva_backup_...zip` files, restore `hesiva_safety_before_restore_...zip` files, arbitrary
+ZIP files, and unrelated files are never part of automatic retention. Because the new verified
+archive exists before cleanup starts, retention never removes the only known valid automatic
+backup. A cleanup failure is logged and does not turn the already-successful new backup into a
+startup failure or trigger broader deletion.
 
 ---
 
@@ -261,6 +274,30 @@ The selected archive remains source-only. Restore publishes both `database.sqlit
 publication, database reopening, or post-publication validation fails, Hesiva rolls both live files
 back from the safety archive. A mixed old/new pair is never reported as success. A rollback failure
 is reported as a severe recovery error and the safety archive is retained.
+
+Before publishing either live file, Hesiva durably records the verified pre-restore safety archive
+in the application-data directory. If the process stops after that boundary, the next exclusively
+locked startup restores the prior database/configuration pair from that archive and then removes the
+recovery marker. A missing, modified, or malformed recovery archive/marker blocks startup rather
+than guessing which half of a pair is authoritative.
+
+If a restore attempt cannot prove that a partially published recovery marker was removed durably,
+the current application context stops accepting business operations and the Main Window closes.
+It does not begin another database/configuration rollback after the restored pair has already been
+published and validated. On the next exclusively locked startup, a surviving marker restores the
+prior pair; if the marker deletion persisted, the already-consistent restored pair remains in use.
+The application never continues accepting changes that a pending recovery marker could later roll
+back.
+
+Restore also fails closed before live-database replacement when any SQLite sidecar directory entry
+remains after Engine shutdown, including a dangling symbolic link, or when sidecar state cannot be
+inspected safely.
+
+Backup validation rejects unexpected executable SQLite schema objects, broken foreign keys,
+cross-customer animal/transaction links, invalid required values/date encodings, and non-integer
+kuruş values. Archive, ZIP entry-count/central-directory, member, configuration, row, and text
+resource ceilings bound local hostile or pathological input before Python's ZIP reader materializes
+the archive directory or any candidate is published.
 
 ---
 

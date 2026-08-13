@@ -11,8 +11,17 @@ HEADER_LIMIT = 64 * 1024
 FILE_COUNT_LIMIT = 128
 PATH_LIMIT = 4096
 COMPRESSED_CHUNK_LIMIT = 64 * 1024 * 1024
+DECOMPRESSED_CHUNK_LIMIT = 64 * 1024 * 1024
 MEMBER_SIZE_LIMIT = 16 * 1024 * 1024 * 1024
+AGGREGATE_MEMBER_SIZE_LIMIT = MEMBER_SIZE_LIMIT
+AGGREGATE_COMPRESSED_SIZE_LIMIT = AGGREGATE_MEMBER_SIZE_LIMIT + 256 * 1024 * 1024
+COMPRESSED_RECORD_COUNT_LIMIT = 1_000_000
+# Leave generous room for the bounded header, file list, paths, record framing,
+# and footer beyond the aggregate compressed payload. The caller applies this
+# to the complete selected EXA before hashing it.
+EXA_SOURCE_SIZE_LIMIT = AGGREGATE_COMPRESSED_SIZE_LIMIT + 64 * 1024 * 1024
 FILE_LIST_SIZE_LIMIT = FILE_COUNT_LIMIT * (PATH_LIMIT + 64)
+DECLARED_SIZE_DIGIT_LIMIT = len(str(MEMBER_SIZE_LIMIT))
 FILE_LIST_NAME = b"FILE:LIST"
 RECORD_MARKER = b"XEC2"
 RECORD_METADATA_SIZE = 3
@@ -29,6 +38,20 @@ class _ListedMember:
     declared_size: int
 
 
+@dataclass(slots=True)
+class _RecordBudget:
+    compressed_size: int = 0
+    record_count: int = 0
+
+    def consume(self, compressed_size: int) -> None:
+        self.compressed_size += compressed_size
+        self.record_count += 1
+        if self.compressed_size > AGGREGATE_COMPRESSED_SIZE_LIMIT:
+            raise ExaFormatError("The EXA source exceeds the aggregate compressed-size limit.")
+        if self.record_count > COMPRESSED_RECORD_COUNT_LIMIT:
+            raise ExaFormatError("The EXA source contains too many compressed records.")
+
+
 def _read_exact(stream: BinaryIO, size: int) -> bytes:
     if size < 0:
         raise ExaFormatError("The EXA source contains an invalid length.")
@@ -42,10 +65,16 @@ def _read_uint32(stream: BinaryIO) -> int:
     return struct.unpack("<I", _read_exact(stream, 4))[0]
 
 
-def _read_zlib_record(stream: BinaryIO, *, output_limit: int) -> bytes:
+def _read_zlib_record(
+    stream: BinaryIO,
+    *,
+    output_limit: int,
+    budget: _RecordBudget,
+) -> bytes:
     compressed_size = _read_uint32(stream)
     if compressed_size == 0 or compressed_size > COMPRESSED_CHUNK_LIMIT:
         raise ExaFormatError("The EXA source contains an unsupported compressed record.")
+    budget.consume(compressed_size)
     compressed = _read_exact(stream, compressed_size)
     decompressor = zlib.decompressobj()
     try:
@@ -76,7 +105,15 @@ def _parse_file_list(payload: bytes, expected_count: int) -> tuple[_ListedMember
         match = re.fullmatch(rb"(.+[.]edb)\t[0-9]+=([0-9]+)", line, re.IGNORECASE)
         if match is None:
             raise ExaFormatError("The EXA file list has an unsupported structure.")
-        declared_size = int(match.group(2))
+        declared_size_bytes = match.group(2)
+        if len(declared_size_bytes) > DECLARED_SIZE_DIGIT_LIMIT:
+            raise ExaFormatError("The EXA file list contains an unsupported member size.")
+        try:
+            declared_size = int(declared_size_bytes)
+        except ValueError as error:
+            raise ExaFormatError(
+                "The EXA file list contains an unsupported member size."
+            ) from error
         if declared_size <= 0 or declared_size > MEMBER_SIZE_LIMIT:
             raise ExaFormatError("The EXA file list contains an unsupported member size.")
         members.append(_ListedMember(match.group(1), declared_size))
@@ -93,6 +130,17 @@ def _member_basename(path_bytes: bytes) -> str:
     return PureWindowsPath(decoded_path).name
 
 
+def _remove_recovered_target(target_path: Path, primary_error: BaseException) -> None:
+    """Best-effort private cleanup without replacing the parser's primary error."""
+    try:
+        target_path.unlink(missing_ok=True)
+    except OSError as cleanup_error:
+        primary_error.add_note(
+            "The private recovered database could not be removed after failure: "
+            f"{type(cleanup_error).__name__}."
+        )
+
+
 def recover_frm1_database(source_path: Path, destination_directory: Path) -> Path:
     """Recover exactly one validated Frm1.edb into a private temporary directory."""
     source = source_path.expanduser()
@@ -106,6 +154,7 @@ def recover_frm1_database(source_path: Path, destination_directory: Path) -> Pat
     target_path = destination / "Frm1.edb"
     candidate_count = 0
     target_created = False
+    record_budget = _RecordBudget()
     try:
         with source.open("rb") as stream:
             header_size = _read_uint32(stream)
@@ -130,9 +179,15 @@ def recover_frm1_database(source_path: Path, destination_directory: Path) -> Pat
                 raise ExaFormatError("The EXA source does not contain the expected file list.")
             _read_record_header(stream)
             members = _parse_file_list(
-                _read_zlib_record(stream, output_limit=FILE_LIST_SIZE_LIMIT),
+                _read_zlib_record(
+                    stream,
+                    output_limit=FILE_LIST_SIZE_LIMIT,
+                    budget=record_budget,
+                ),
                 file_count,
             )
+            if sum(member.declared_size for member in members) > AGGREGATE_MEMBER_SIZE_LIMIT:
+                raise ExaFormatError("The EXA source exceeds the aggregate member-size limit.")
 
             for listed_member in members:
                 if _read_uint32(stream) != 0:
@@ -156,7 +211,17 @@ def recover_frm1_database(source_path: Path, destination_directory: Path) -> Pat
                         0o600,
                     )
                     target_created = True
-                    output: BinaryIO | None = os.fdopen(descriptor, "wb")
+                    try:
+                        output: BinaryIO | None = os.fdopen(descriptor, "wb")
+                    except BaseException as error:
+                        try:
+                            os.close(descriptor)
+                        except OSError as cleanup_error:
+                            error.add_note(
+                                "The recovered-database descriptor could not be closed: "
+                                f"{type(cleanup_error).__name__}."
+                            )
+                        raise
                 else:
                     output = None
 
@@ -165,7 +230,11 @@ def recover_frm1_database(source_path: Path, destination_directory: Path) -> Pat
                     while recovered_size < listed_member.declared_size:
                         chunk = _read_zlib_record(
                             stream,
-                            output_limit=listed_member.declared_size - recovered_size,
+                            output_limit=min(
+                                DECOMPRESSED_CHUNK_LIMIT,
+                                listed_member.declared_size - recovered_size,
+                            ),
+                            budget=record_budget,
                         )
                         if not chunk:
                             raise ExaFormatError("The EXA source contains an empty member chunk.")
@@ -184,20 +253,22 @@ def recover_frm1_database(source_path: Path, destination_directory: Path) -> Pat
 
             if _read_exact(stream, len(FOOTER)) != FOOTER or stream.read(1):
                 raise ExaFormatError("The EXA source contains unexpected trailing data.")
-    except ExaFormatError:
+    except ExaFormatError as error:
         if target_created:
-            target_path.unlink(missing_ok=True)
+            _remove_recovered_target(target_path, error)
         raise
     except OSError as error:
+        source_error = ExaFormatError("The EXA source could not be read safely.")
         if target_created:
-            target_path.unlink(missing_ok=True)
-        raise ExaFormatError("The EXA source could not be read safely.") from error
+            _remove_recovered_target(target_path, source_error)
+        raise source_error from error
 
     if candidate_count != 1 or not target_path.is_file():
         raise ExaFormatError("The EXA source does not contain exactly one Frm1.edb member.")
     with target_path.open("rb") as stream:
         sqlite_magic = stream.read(16)
     if sqlite_magic != b"SQLite format 3\x00":
-        target_path.unlink()
-        raise ExaFormatError("The recovered Frm1.edb is not a SQLite 3 database.")
+        error = ExaFormatError("The recovered Frm1.edb is not a SQLite 3 database.")
+        _remove_recovered_target(target_path, error)
+        raise error
     return target_path

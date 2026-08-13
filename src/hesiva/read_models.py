@@ -89,6 +89,20 @@ class ReminderSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class StartupReminderSummary:
+    """Application-wide active due-reminder counts and deterministic UI focus."""
+
+    overdue_count: int
+    today_count: int
+    focus_customer_id: int | None
+    focus_reminder_id: int | None
+
+    @property
+    def total_count(self) -> int:
+        return self.overdue_count + self.today_count
+
+
+@dataclass(frozen=True, slots=True)
 class AccountHistoryRow:
     """One immutable financial-history row with its chronological running balance."""
 

@@ -273,6 +273,10 @@ Application starts
         ↓
 Locate application data directory
         ↓
+Acquire exclusive application-data ownership
+        ↓
+Recover a recorded interrupted restore, if present
+        ↓
 Load configuration
         ↓
 Initialize logging
@@ -291,9 +295,15 @@ Initialize services
         ↓
 First-run password setup or authentication
         ↓
-Check due reminders
+Construct and show Main Window
         ↓
-Open main window
+Run once-per-run automatic daily backup check
+        ↓
+Show one backup warning on failure, without blocking normal use
+        ↓
+Query application-wide active overdue/today reminder summary
+        ↓
+Show at most one summary and optionally navigate existing reminder UI
 ```
 
 Exact first-run ordering may differ slightly because a brand-new database has no existing data to back up.
@@ -641,11 +651,11 @@ Application starts
         ↓
 ReminderService
         ↓
-Retrieve due reminders
+One set-based query returns plain overdue/today counts and deterministic active-customer focus IDs
         ↓
 Main Window
         ↓
-Display notification state
+Display at most one startup summary after the window is available
 ```
 
 A reminder contains:
@@ -658,6 +668,20 @@ A reminder contains:
 The reminder system must not require an Internet connection.
 
 Desktop notifications may be added, but reminders must remain visible inside the application even if operating-system notifications are unavailable.
+
+The counts include every active reminder application-wide, including reminders retained for an
+archived customer. Navigation never silently unarchives a customer: it selects the earliest due
+reminder whose owner is currently in the active customer list and opens the existing Hatırlatmalar
+tab. If no such active owner exists, the summary remains informative and the status bar explains
+that archived customers may own the due reminders. The separately scheduled local-midnight refresh
+only reclassifies the selected customer's rows and never invokes the startup summary again.
+
+`AutomaticBackupService` owns the startup daily/retention policy and delegates all snapshot,
+configuration, archive, and validation work to `BackupService`. Its one application-context
+instance records that the check was attempted, while durable daily success is derived only from a
+strictly named, stable, independently validated archive in the controlled backup directory. It
+also cross-checks the archive's authoritative creation timestamp against the filename identity and
+rejects multiply-linked aliases. It does not open a Session or modify business data.
 
 ---
 
@@ -759,6 +783,32 @@ Restart or reinitialize application
 ```
 
 A failed restore must not destroy the currently working database.
+
+One running Hesiva process owns an application-data directory at a time. The ownership lock is
+acquired before SQLite recovery/inspection and remains held until every context-owned Engine and
+Session scope has closed. This prevents a second process from committing to an obsolete database
+inode while restore replaces the live path. SQLite hot rollback journals left by an interrupted
+writer are recovered under that exclusive ownership before read-only schema inspection.
+
+The live `hesiva.db` entry must also be a regular, singly linked file. Symbolic links and ordinary
+hard-link aliases are rejected before an Engine is created, so two differently locked application
+directories cannot address one SQLite inode. Startup recognizes only its exact interrupted
+fresh-publication hard-link pair, removes the known staging name under the process lock, and rejects
+every other linked topology without guessing.
+
+Before constructing the application Engine, startup also streams every transaction amount through
+the exact signed-integer financial invariant while counting only active rows toward aggregate
+capacity. A pre-existing database whose individual values or active debt/payment-side totals could
+overflow SQLite aggregation is rejected without modification, so later summary, history, and
+report queries cannot fail partway through normal use.
+
+Database/configuration restore is a recoverable multi-file publication, not a single filesystem
+atomic operation. A durable marker identifies the verified pre-restore safety archive. Any process
+termination after marker publication causes the next startup to restore that complete prior pair;
+the marker is removed only after the chosen pair has been reopened and validated. Failure to clear
+that final marker closes database access without initiating another unjournaled pair publication:
+a surviving marker recovers the prior pair, while a durably removed marker leaves the already
+validated restored pair intact.
 
 ---
 

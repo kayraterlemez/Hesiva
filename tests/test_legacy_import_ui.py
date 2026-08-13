@@ -1,4 +1,5 @@
 import os
+import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -7,7 +8,9 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QLabel  # noqa: E402
+from PySide6.QtCore import QThread, Qt  # noqa: E402
+from PySide6.QtTest import QTest  # noqa: E402
+from PySide6.QtWidgets import QApplication, QDialog, QLabel  # noqa: E402
 
 from hesiva.application import create_application_context  # noqa: E402
 from hesiva.composition import ApplicationContext  # noqa: E402
@@ -88,6 +91,133 @@ def test_missing_source_error_stays_on_source_step_and_is_user_facing(
     assert not dialog.source_error_label.isHidden()
     assert ".exa" in dialog.source_error_label.text()
     assert application_context.active_service_scopes == 0
+    dialog.close()
+
+
+def test_busy_wizard_cannot_be_dismissed_by_escape_reject_done_or_close(
+    application: QApplication,
+    application_context: ApplicationContext,
+) -> None:
+    dialog = LegacyImportDialog(application_context)
+    dialog.show()
+    dialog._set_busy(True)
+
+    QTest.keyClick(dialog, Qt.Key.Key_Escape)
+    application.processEvents()
+    assert dialog.isVisible()
+
+    dialog.reject()
+    dialog.done(QDialog.DialogCode.Rejected.value)
+    assert dialog.close() is False
+    application.processEvents()
+    assert dialog.isVisible()
+
+    dialog._set_busy(False)
+    assert dialog.close() is True
+
+
+def test_worker_start_failure_releases_busy_state_and_override_cursor(
+    application: QApplication,
+    application_context: ApplicationContext,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_start(_thread: QThread) -> None:
+        raise RuntimeError("PRIVATE THREAD START DETAIL")
+
+    assert QApplication.overrideCursor() is None
+    monkeypatch.setattr(QThread, "start", fail_start)
+    dialog = LegacyImportDialog(application_context)
+    dialog.set_source_path(tmp_path / "source.exa")
+
+    dialog._go_next()
+    application.processEvents()
+
+    assert dialog.pages.currentIndex() == 4
+    assert dialog.result_heading.text() == "Veriler İçe Aktarılamadı"
+    assert "güvenli şekilde işlenemedi" in dialog.result_message.text()
+    assert "PRIVATE THREAD START DETAIL" not in dialog.result_message.text()
+    assert dialog._busy is False
+    assert dialog._operation_kind is None
+    assert dialog._operation_thread is None
+    assert dialog._operation_worker is None
+    assert dialog._override_cursor_active is False
+    assert QApplication.overrideCursor() is None
+    assert dialog.next_button.isEnabled()
+    dialog.close()
+
+
+def test_unexpected_event_loop_exit_drains_worker_before_dialog_cleanup(
+    application: QApplication,
+    application_context: ApplicationContext,
+) -> None:
+    events: list[str] = []
+
+    class RunningThread:
+        def isRunning(self) -> bool:
+            return True
+
+        def quit(self) -> None:
+            events.append("quit-requested")
+
+        def wait(self) -> bool:
+            events.append("worker-stopped")
+            return True
+
+    dialog = LegacyImportDialog(application_context)
+    dialog._set_busy(True)
+    dialog._operation_kind = "import"
+    dialog._operation_thread = RunningThread()  # type: ignore[assignment]
+    dialog._operation_worker = object()  # type: ignore[assignment]
+
+    dialog.wait_for_active_operation()
+
+    assert events == ["quit-requested", "worker-stopped"]
+    assert dialog._busy is False
+    assert dialog._operation_thread is None
+    assert dialog._operation_worker is None
+    assert dialog._operation_kind is None
+
+
+def test_busy_escape_keeps_real_worker_owned_until_it_finishes(
+    application: QApplication,
+    application_context: ApplicationContext,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = create_default_source(tmp_path / "blocking-source.exa")
+    entered = threading.Event()
+    release = threading.Event()
+    original_preflight = LegacyImportService.preflight
+
+    def blocking_preflight(self: LegacyImportService, source_path: Path):  # noqa: ANN202
+        entered.set()
+        assert release.wait(timeout=5)
+        return original_preflight(self, source_path)
+
+    monkeypatch.setattr(LegacyImportService, "preflight", blocking_preflight)
+    dialog = LegacyImportDialog(application_context)
+    dialog.set_source_path(source)
+    dialog.show()
+    dialog._go_next()
+
+    deadline = time.monotonic() + 5
+    while not entered.is_set() and time.monotonic() < deadline:
+        application.processEvents()
+        time.sleep(0.005)
+    assert entered.is_set()
+    assert dialog._busy
+
+    QTest.keyClick(dialog, Qt.Key.Key_Escape)
+    application.processEvents()
+
+    assert dialog.isVisible()
+    assert dialog._operation_thread is not None
+    assert dialog._operation_thread.isRunning()
+
+    release.set()
+    wait_for_operation(application, dialog)
+    assert dialog.preflight is not None
     dialog.close()
 
 

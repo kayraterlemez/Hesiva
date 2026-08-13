@@ -101,6 +101,14 @@ dist/Hesiva/Hesiva
 dist/Hesiva/_internal/
 ```
 
+Immediately before PyInstaller starts, the build helper records a SHA-256 digest over the complete
+production source/resource/spec input set and invalidates any prior provenance record. After the
+build, it accepts the output only if those inputs are unchanged, then records both that source
+digest and a digest covering every runtime file, mode, and symbolic-link target in
+`dist/Hesiva.provenance.json`. This ignored build artifact is integrity/provenance metadata, not a
+signature. Release staging and smoke validation reject a missing record, source drift, or runtime
+drift; they therefore cannot silently reuse an old `dist/Hesiva` after the repository changes.
+
 For diagnosis after source validation has already passed, the explicit build-only path is:
 
 ```bash
@@ -121,6 +129,11 @@ scripts/smoke_packaged_linux.sh
 
 The script first launches the actual release executable offscreen with isolated `HOME` and
 `XDG_DATA_HOME` and verifies that it reaches first-run without writing `config.json` prematurely.
+The offscreen Qt backing-store diagnostic must confirm that a top-level UI surface was actually
+created; a process that merely remains alive after database setup is not sufficient.
+The database created by that production executable must pass SQLite integrity checking, contain the
+complete current model table set, and carry the current Alembic head. The production tree is also
+checked against its build provenance before and after smoke execution.
 It then builds a separate console smoke artifact under `build/packaged-smoke-dist/`. That
 development-only artifact exercises:
 
@@ -213,11 +226,19 @@ On an amd64 build host with `dpkg-deb`, run:
 scripts/build_deb.sh
 ```
 
-The script obtains the version through `hesiva.version.get_application_version()`, uses a private
-temporary package root, and writes `dist/hesiva_<version>_amd64.deb`. Current control metadata uses
-package `hesiva`, architecture `amd64`, section `utils`, priority `optional`, the locked maintainer,
-and only external `libc6`/`libgl1` runtime dependencies; the rest of the inspected Qt/XCB runtime is
-inside the PyInstaller tree. The helper never installs build tools or the package automatically.
+The script obtains the version through `hesiva.version.get_application_version()`, requires the
+existing `onedir` tree to match both its recorded source and runtime digests, uses a private
+temporary package root, and writes `dist/hesiva_<version>_amd64.deb`. It verifies the copied
+`/opt/hesiva` tree again before publication, so a missing, stale, concurrently changed, or partially
+copied runtime fails closed with an instruction to rebuild rather than being silently packaged.
+Current control metadata uses package `hesiva`, architecture `amd64`, section `utils`, priority
+`optional`, the locked maintainer, and currently declares only `libc6`/`libgl1` runtime
+dependencies. That dependency declaration is not yet release-validated: inspection of the frozen
+Qt GUI/XCB libraries on the development host still shows external EGL, font, X11, xkbcommon, GLib,
+and XCB-family native requirements. Their authoritative Debian package mapping must be derived and
+tested on the selected clean release baseline before the `.deb` is distributable; PyInstaller
+bundling must not be treated as proof that these host libraries are present. The helper never
+installs build tools or the package automatically.
 When `dpkg-deb` is unavailable, `scripts/build_deb.sh --stage-only /absolute/new/directory` may be
 used to inspect the exact package root without fabricating a `.deb`; the destination must not exist.
 
@@ -254,8 +275,20 @@ py -3.13 -m venv .venv
 .venv\Scripts\python -m pytest
 .venv\Scripts\python -m ruff check .
 .venv\Scripts\python -m ruff format --check .
+.venv\Scripts\python packaging\artifact_provenance.py invalidate
+$sourceDigest = .venv\Scripts\python packaging\artifact_provenance.py source-digest
 .venv\Scripts\python -m PyInstaller --clean --noconfirm packaging\Hesiva.spec
+.venv\Scripts\python packaging\artifact_provenance.py record `
+    --expected-source-sha256 $sourceDigest
+.venv\Scripts\python packaging\artifact_provenance.py verify
 ```
+
+This is the same source/runtime provenance contract used by the Linux helper. It includes the
+Windows `packaging\icons\hesiva.ico`, Linux hicolor release icons, desktop/package metadata, MIT
+license, application sources/resources, spec/support code, and project metadata. Consequently an
+ICO/resource change or source change during the Windows build invalidates publication. The
+provenance record establishes local build identity and integrity only; it is not Authenticode and
+does not replace a future Windows signing decision.
 
 Windows has not been built or validated by the Linux milestone. A clean Windows VM test must verify
 the qwindows plugin, `%LOCALAPPDATA%\\Hesiva`, first-run/login/password change, business CRUD,

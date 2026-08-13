@@ -9,7 +9,9 @@ from hesiva.models import model_metadata
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # Alembic's CLI configuration must not disable loggers that the running
+    # application or a longer-lived test process already owns.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = model_metadata
 
@@ -38,13 +40,16 @@ def run_migrations_online() -> None:
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
-    configure_sqlite_engine(connectable)
+    try:
+        configure_sqlite_engine(connectable)
 
-    with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        with connectable.connect() as connection:
+            context.configure(connection=connection, target_metadata=target_metadata)
 
-        with context.begin_transaction():
-            context.run_migrations()
+            with context.begin_transaction():
+                context.run_migrations()
+    finally:
+        connectable.dispose()
 
 
 if context.is_offline_mode():

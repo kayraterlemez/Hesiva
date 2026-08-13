@@ -168,6 +168,42 @@ def test_customer_switching_replaces_reminder_state_and_uses_ids(
     assert not window.show_inactive_reminders_checkbox.isEnabled()
 
 
+def test_selected_customer_reminders_roll_over_at_local_midnight(
+    application: QApplication,
+    application_context: ApplicationContext,
+) -> None:
+    current_date = [date(2026, 8, 13)]
+    with application_context.services() as services:
+        customer = services.customer.create_customer("Midnight Reminder Owner")
+        reminder = services.reminder.create_reminder(
+            customer.id,
+            current_date[0] + timedelta(days=1),
+            "Gece yarısı yenilenecek",
+        )
+        customer_id = customer.id
+        reminder_id = reminder.id
+
+    window = MainWindow(application_context, date_provider=lambda: current_date[0])
+    window.show()
+    application.processEvents()
+    window.customer_list.setCurrentItem(item_for_customer(window.customer_list, customer_id))
+    window.reminder_table.selectRow(row_for_reminder(window, reminder_id))
+
+    assert window.reminder_table.item(0, 2).text() == "1 gün kaldı"
+    assert window.today_reminder_count_label.text() == "Bugün Yapılacak: 0 Hatırlatma"
+    assert window._reminder_rollover_timer.isSingleShot()
+    assert window._reminder_rollover_timer.isActive()
+
+    current_date[0] += timedelta(days=1)
+    window._refresh_reminders_after_date_rollover()
+
+    assert window.reminder_table.item(0, 2).text() == "Bugün"
+    assert window.today_reminder_count_label.text() == "Bugün Yapılacak: 1 Hatırlatma"
+    assert window._selected_reminder_id() == reminder_id
+    assert window._reminder_rollover_timer.isActive()
+    window.close()
+
+
 def test_add_edit_complete_cancel_and_inactive_visibility_workflow(
     application: QApplication,
     application_context: ApplicationContext,

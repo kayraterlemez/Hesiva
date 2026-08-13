@@ -2,14 +2,26 @@ import hashlib
 import math
 import re
 import sqlite3
+import stat
 import tempfile
 from collections import Counter, defaultdict
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import date, time
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from hesiva.importers.exa import ExaFormatError, recover_frm1_database
+from hesiva import data_limits
+from hesiva.financial_integrity import (
+    ActiveFinancialTotals,
+    FinancialIntegrityError,
+    validate_transaction_amount,
+)
+from hesiva.importers.exa import (
+    EXA_SOURCE_SIZE_LIMIT,
+    ExaFormatError,
+    recover_frm1_database,
+)
 from hesiva.read_models import LegacyImportPreflight
 
 
@@ -84,10 +96,35 @@ PLACEHOLDER_TEXT_COLUMNS = (
     "STarih",
 )
 PLACEHOLDER_MONEY_COLUMNS = ("CLimit", "Borc", "Alacak", "Bakiye")
+SQLITE_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
+LEGACY_DATABASE_SIZE_LIMIT = 16 * 1024 * 1024 * 1024
+LEGACY_ROW_COUNT_LIMIT = 1_000_000
+LEGACY_TEXT_CELL_SIZE_LIMIT = 16 * 1024 * 1024
+LEGACY_TEXT_AGGREGATE_SIZE_LIMIT = 1024 * 1024 * 1024
+LEGACY_SQLITE_SCHEMA_LENGTH_LIMIT = 64 * 1024
+LEGACY_SQL_STATEMENT_SIZE_LIMIT = 64 * 1024
+HASH_CHUNK_SIZE = 1024 * 1024
 
 
 class LegacySourceError(Exception):
     """Raised when a legacy database violates the supported V1 source contract."""
+
+
+@dataclass(slots=True)
+class _TextBudget:
+    consumed_bytes: int = 0
+
+    def consume(self, value: object, field_name: str) -> None:
+        if value is None:
+            return
+        if not isinstance(value, bytes):
+            raise LegacySourceError(f"Legacy {field_name} does not use the supported text storage.")
+        value_size = len(value)
+        if value_size > LEGACY_TEXT_CELL_SIZE_LIMIT:
+            raise LegacySourceError("A legacy text value exceeds the supported size limit.")
+        self.consumed_bytes += value_size
+        if self.consumed_bytes > LEGACY_TEXT_AGGREGATE_SIZE_LIMIT:
+            raise LegacySourceError("Legacy text exceeds the aggregate supported size limit.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,12 +164,76 @@ class LegacyImportPlan:
     preflight: LegacyImportPreflight
 
 
-def _source_digest(path: Path) -> str:
+def _source_digest(path: Path, *, size_limit: int | None = None) -> str:
     try:
         with path.open("rb") as stream:
-            return hashlib.file_digest(stream, "sha256").hexdigest()
+            digest = hashlib.sha256()
+            consumed_bytes = 0
+            while chunk := stream.read(HASH_CHUNK_SIZE):
+                consumed_bytes += len(chunk)
+                if size_limit is not None and consumed_bytes > size_limit:
+                    raise LegacySourceError(
+                        "The selected legacy database exceeds the supported size limit."
+                    )
+                digest.update(chunk)
+            return digest.hexdigest()
     except OSError as error:
         raise LegacySourceError("The selected legacy source could not be read safely.") from error
+
+
+def _ensure_database_size_supported(database_path: Path) -> None:
+    try:
+        database_size = database_path.stat().st_size
+    except OSError as error:
+        raise LegacySourceError(
+            "The selected legacy database could not be inspected safely."
+        ) from error
+    if database_size > LEGACY_DATABASE_SIZE_LIMIT:
+        raise LegacySourceError("The selected legacy database exceeds the supported size limit.")
+
+
+def _ensure_exa_size_supported(source_path: Path) -> None:
+    try:
+        source_size = source_path.stat().st_size
+    except OSError as error:
+        raise LegacySourceError("The selected legacy source could not be inspected safely.") from (
+            error
+        )
+    if source_size > EXA_SOURCE_SIZE_LIMIT:
+        raise LegacySourceError("The selected EXA source exceeds the supported size limit.")
+
+
+def _ensure_direct_database_has_no_sidecars(database_path: Path) -> None:
+    try:
+        resolved_path = database_path.resolve(strict=True)
+        source_stat = database_path.lstat()
+        resolved_stat = resolved_path.stat()
+    except (OSError, RuntimeError) as error:
+        raise LegacySourceError(
+            "The selected legacy database sidecar state could not be inspected safely."
+        ) from error
+    if (
+        not stat.S_ISREG(resolved_stat.st_mode)
+        or resolved_stat.st_nlink != 1
+        or (stat.S_ISREG(source_stat.st_mode) and source_stat.st_nlink != 1)
+    ):
+        raise LegacySourceError(
+            "Direct .edb import requires a regular database without hard-link aliases."
+        )
+    for candidate_path in dict.fromkeys((database_path, resolved_path)):
+        for suffix in SQLITE_SIDECAR_SUFFIXES:
+            sidecar_path = Path(f"{candidate_path}{suffix}")
+            try:
+                sidecar_path.lstat()
+            except FileNotFoundError:
+                continue
+            except OSError as error:
+                raise LegacySourceError(
+                    "The selected legacy database sidecar state could not be inspected safely."
+                ) from error
+            raise LegacySourceError(
+                "Direct .edb import requires a closed database with no SQLite sidecar files."
+            )
 
 
 def _decode_text(value: object, field_name: str) -> str | None:
@@ -152,6 +253,17 @@ def _normalize_text(value: object, field_name: str) -> str | None:
         return None
     normalized = decoded.strip()
     return normalized or None
+
+
+def _validate_mapped_text(value: str | None, field_name: str) -> str | None:
+    if value is not None and (
+        len(value) > data_limits.PERSISTED_USER_TEXT_MAX_BYTES
+        or len(value.encode("utf-8")) > data_limits.PERSISTED_USER_TEXT_MAX_BYTES
+    ):
+        raise LegacySourceError(
+            f"Legacy {field_name} exceeds Hesiva's supported UTF-8 text size limit."
+        )
+    return value
 
 
 def _parse_date(value: object, field_name: str, *, required: bool) -> date | None:
@@ -204,7 +316,12 @@ def _money_to_kurus(value: Decimal, field_name: str) -> int:
         raise LegacySourceError(f"Legacy {field_name} cannot be converted exactly.") from error
     if scaled != integral:
         raise LegacySourceError(f"Legacy {field_name} cannot be converted exactly.")
-    return int(integral)
+    amount_kurus = int(integral)
+    if not -((1 << 63) - 1) <= amount_kurus <= (1 << 63) - 1:
+        raise LegacySourceError(
+            f"Legacy {field_name} is outside the supported exact financial range."
+        )
+    return amount_kurus
 
 
 def _validate_schema(
@@ -222,7 +339,37 @@ def _validate_schema(
         raise LegacySourceError(f"Legacy table {table} does not match the supported V1 schema.")
 
 
+def _validate_row_counts(connection: sqlite3.Connection) -> tuple[int, int]:
+    row_counts: dict[str, int] = {}
+    total_rows = 0
+    for table in ("CariKart", "Data", "ATemp"):
+        row = connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()
+        if row is None or type(row[0]) is not int or row[0] < 0:
+            raise LegacySourceError(f"Legacy table {table} has an invalid row count.")
+        row_counts[table] = row[0]
+        total_rows += row[0]
+        if total_rows > LEGACY_ROW_COUNT_LIMIT:
+            raise LegacySourceError("The legacy database exceeds the supported row-count limit.")
+    return row_counts["CariKart"], row_counts["Data"]
+
+
+def _set_sqlite_resource_limits(
+    connection: sqlite3.Connection,
+    *,
+    length_limit: int,
+) -> None:
+    """Bound SQLite allocations before source-controlled values reach Python."""
+    try:
+        connection.setlimit(sqlite3.SQLITE_LIMIT_SQL_LENGTH, LEGACY_SQL_STATEMENT_SIZE_LIMIT)
+        connection.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, length_limit)
+    except (AttributeError, OverflowError, sqlite3.Error) as error:
+        raise LegacySourceError(
+            "The legacy database resource limits could not be applied safely."
+        ) from error
+
+
 def _validate_text_encoding(connection: sqlite3.Connection) -> None:
+    budget = _TextBudget()
     for table, columns in (
         ("CariKart", CARIKART_TEXT_COLUMNS),
         ("Data", DATA_TEXT_COLUMNS),
@@ -231,6 +378,7 @@ def _validate_text_encoding(connection: sqlite3.Connection) -> None:
         projection = ", ".join(f'"{column}"' for column in columns)
         for row in connection.execute(f'SELECT {projection} FROM "{table}"'):
             for column, value in zip(columns, row, strict=True):
+                budget.consume(value, f"{table}.{column}")
                 _decode_text(value, f"{table}.{column}")
 
 
@@ -255,6 +403,7 @@ def _require_legacy_id(value: object, field_name: str) -> int:
 
 
 def _read_database(database_path: Path, source_sha256: str) -> LegacyImportPlan:
+    _ensure_database_size_supported(database_path)
     try:
         with database_path.open("rb") as stream:
             sqlite_magic = stream.read(16)
@@ -264,9 +413,16 @@ def _read_database(database_path: Path, source_sha256: str) -> LegacyImportPlan:
         raise LegacySourceError("The selected legacy database is not SQLite 3.")
     uri = f"{database_path.resolve().as_uri()}?mode=ro&immutable=1"
     try:
-        with sqlite3.connect(uri, uri=True) as connection:
+        with closing(sqlite3.connect(uri, uri=True)) as connection:
             connection.text_factory = bytes
             connection.row_factory = sqlite3.Row
+            _set_sqlite_resource_limits(
+                connection,
+                length_limit=max(
+                    LEGACY_TEXT_CELL_SIZE_LIMIT,
+                    LEGACY_SQLITE_SCHEMA_LENGTH_LIMIT,
+                ),
+            )
             connection.execute("PRAGMA query_only=ON")
             integrity_rows = connection.execute("PRAGMA integrity_check").fetchall()
             if [row[0] for row in integrity_rows] != [b"ok"]:
@@ -274,30 +430,76 @@ def _read_database(database_path: Path, source_sha256: str) -> LegacyImportPlan:
             _validate_schema(connection, "CariKart", CARIKART_COLUMNS)
             _validate_schema(connection, "Data", DATA_COLUMNS)
             _validate_schema(connection, "ATemp", ATEMP_COLUMNS)
+            source_customer_count, source_data_count = _validate_row_counts(connection)
+            _set_sqlite_resource_limits(
+                connection,
+                length_limit=LEGACY_TEXT_CELL_SIZE_LIMIT,
+            )
             _validate_text_encoding(connection)
-            return _read_rows(connection, source_sha256)
+            return _read_rows(
+                connection,
+                source_sha256,
+                source_customer_count=source_customer_count,
+                source_data_count=source_data_count,
+            )
     except LegacySourceError:
         raise
+    except sqlite3.DataError as error:
+        raise LegacySourceError("A legacy text value exceeds the supported size limit.") from error
     except sqlite3.Error as error:
         raise LegacySourceError("The legacy database could not be read safely.") from error
 
 
-def _read_rows(connection: sqlite3.Connection, source_sha256: str) -> LegacyImportPlan:
-    customer_rows = connection.execute("SELECT * FROM CariKart ORDER BY ID").fetchall()
-    data_rows = connection.execute("SELECT * FROM Data ORDER BY ID").fetchall()
-    source_customer_count = len(customer_rows)
-    source_data_count = len(data_rows)
+def _read_exa_database(source: Path, source_sha256: str) -> LegacyImportPlan:
+    """Recover/read one EXA and deterministically clean its private database."""
+    temporary_directory: tempfile.TemporaryDirectory[str] | None = None
+    primary_error: BaseException | None = None
+    try:
+        temporary_directory = tempfile.TemporaryDirectory(prefix="hesiva-legacy-import-")
+        extraction_path = Path(temporary_directory.name)
+        extraction_path.chmod(0o700)
+        database_path = recover_frm1_database(source, extraction_path)
+        return _read_database(database_path, source_sha256)
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        if temporary_directory is not None:
+            try:
+                temporary_directory.cleanup()
+            except OSError as cleanup_error:
+                if primary_error is not None:
+                    primary_error.add_note(
+                        "The private legacy-import directory could not be removed: "
+                        f"{type(cleanup_error).__name__}."
+                    )
+                else:
+                    raise LegacySourceError(
+                        "Private legacy-import data could not be removed safely."
+                    ) from cleanup_error
 
-    customer_ids = [_require_legacy_id(row["ID"], "CariKart.ID") for row in customer_rows]
-    transaction_ids = [_require_legacy_id(row["ID"], "Data.ID") for row in data_rows]
-    if len(set(customer_ids)) != len(customer_ids):
-        raise LegacySourceError("The legacy source contains duplicate customer IDs.")
-    if len(set(transaction_ids)) != len(transaction_ids):
-        raise LegacySourceError("The legacy source contains duplicate transaction IDs.")
 
-    customer_id_set = set(customer_ids)
+def _read_rows(
+    connection: sqlite3.Connection,
+    source_sha256: str,
+    *,
+    source_customer_count: int,
+    source_data_count: int,
+) -> LegacyImportPlan:
+    customer_id_set: set[int] = set()
+    for row in connection.execute('SELECT "ID" FROM "CariKart" ORDER BY "ID"'):
+        customer_id = _require_legacy_id(row["ID"], "CariKart.ID")
+        if customer_id in customer_id_set:
+            raise LegacySourceError("The legacy source contains duplicate customer IDs.")
+        customer_id_set.add(customer_id)
+
+    transaction_id_set: set[int] = set()
     linked_counts: Counter[int] = Counter()
-    for row in data_rows:
+    for row in connection.execute('SELECT "ID", "CariKartID" FROM "Data" ORDER BY "ID"'):
+        transaction_id = _require_legacy_id(row["ID"], "Data.ID")
+        if transaction_id in transaction_id_set:
+            raise LegacySourceError("The legacy source contains duplicate transaction IDs.")
+        transaction_id_set.add(transaction_id)
         customer_id = _require_legacy_id(row["CariKartID"], "Data.CariKartID")
         if customer_id not in customer_id_set:
             raise LegacySourceError("The legacy source contains an orphan customer reference.")
@@ -306,9 +508,12 @@ def _read_rows(connection: sqlite3.Connection, source_sha256: str) -> LegacyImpo
     customers: list[LegacyCustomerRecord] = []
     skipped_placeholders = 0
     stored_summaries: dict[int, tuple[int | None, int | None, int | None]] = {}
-    for row in customer_rows:
+    for row in connection.execute('SELECT * FROM "CariKart" ORDER BY "ID"'):
         legacy_id = _require_legacy_id(row["ID"], "CariKart.ID")
-        full_name = _normalize_text(row["Unvan"], "CariKart.Unvan")
+        full_name = _validate_mapped_text(
+            _normalize_text(row["Unvan"], "CariKart.Unvan"),
+            "CariKart.Unvan",
+        )
         if full_name is None:
             if _is_empty_placeholder(row, linked_counts[legacy_id]):
                 skipped_placeholders += 1
@@ -329,13 +534,22 @@ def _read_rows(connection: sqlite3.Connection, source_sha256: str) -> LegacyImpo
                 None if value is None else _money_to_kurus(value, f"CariKart.{field}")
             )
         stored_summaries[legacy_id] = tuple(stored_summary_values)
+        mapped_phone = _validate_mapped_text(gsm or telephone, "CariKart phone")
+        mapped_address = _validate_mapped_text(
+            ", ".join(address_parts) or None,
+            "CariKart address",
+        )
+        mapped_notes = _validate_mapped_text(
+            _normalize_text(row["CNot"], "CariKart.CNot"),
+            "CariKart.CNot",
+        )
         customers.append(
             LegacyCustomerRecord(
                 legacy_id=legacy_id,
                 full_name=full_name,
-                phone=gsm or telephone,
-                address=", ".join(address_parts) or None,
-                notes=_normalize_text(row["CNot"], "CariKart.CNot"),
+                phone=mapped_phone,
+                address=mapped_address,
+                notes=mapped_notes,
                 registered_on=_parse_date(row["Tarih"], "CariKart.Tarih", required=False),
             )
         )
@@ -344,8 +558,10 @@ def _read_rows(connection: sqlite3.Connection, source_sha256: str) -> LegacyImpo
     transactions: list[LegacyTransactionRecord] = []
     skipped_zero = 0
     per_customer_values: dict[int, list[int]] = defaultdict(lambda: [0, 0])
-    transaction_dates: list[date] = []
-    for row in data_rows:
+    active_totals = ActiveFinancialTotals(debt_kurus=0, payment_kurus=0)
+    earliest_transaction_date: date | None = None
+    latest_transaction_date: date | None = None
+    for row in connection.execute('SELECT * FROM "Data" ORDER BY "ID"'):
         legacy_id = _require_legacy_id(row["ID"], "Data.ID")
         customer_legacy_id = _require_legacy_id(row["CariKartID"], "Data.CariKartID")
         if customer_legacy_id not in imported_customer_ids:
@@ -372,11 +588,20 @@ def _read_rows(connection: sqlite3.Connection, source_sha256: str) -> LegacyImpo
         )
         if description is None:
             raise LegacySourceError("A legacy transaction has no usable description.")
+        description = _validate_mapped_text(description, "Data description")
+        assert description is not None
         amount_kurus = (
             _money_to_kurus(debt, "Data.Borc")
             if debt > 0
             else -_money_to_kurus(payment, "Data.Alacak")
         )
+        try:
+            amount_kurus = validate_transaction_amount(amount_kurus)
+            active_totals = active_totals.including(amount_kurus)
+        except FinancialIntegrityError as error:
+            raise LegacySourceError(
+                "Legacy active financial totals exceed the supported exact range."
+            ) from error
         transactions.append(
             LegacyTransactionRecord(
                 legacy_id=legacy_id,
@@ -391,7 +616,10 @@ def _read_rows(connection: sqlite3.Connection, source_sha256: str) -> LegacyImpo
             per_customer_values[customer_legacy_id][0] += amount_kurus
         else:
             per_customer_values[customer_legacy_id][1] += -amount_kurus
-        transaction_dates.append(transaction_date)
+        if earliest_transaction_date is None or transaction_date < earliest_transaction_date:
+            earliest_transaction_date = transaction_date
+        if latest_transaction_date is None or transaction_date > latest_transaction_date:
+            latest_transaction_date = transaction_date
 
     per_customer = tuple(
         LegacyCustomerFinancialExpectation(
@@ -426,8 +654,8 @@ def _read_rows(connection: sqlite3.Connection, source_sha256: str) -> LegacyImpo
             "Bazı eski müşteri özetleri işlem geçmişiyle uyuşmuyor; işlem geçmişi esas alındı.",
         )
 
-    total_debt = sum(value.debt_kurus for value in per_customer)
-    total_payment = sum(value.payment_kurus for value in per_customer)
+    total_debt = active_totals.debt_kurus
+    total_payment = active_totals.payment_kurus
     preflight = LegacyImportPreflight(
         source_sha256=source_sha256,
         source_customer_count=source_customer_count,
@@ -439,8 +667,8 @@ def _read_rows(connection: sqlite3.Connection, source_sha256: str) -> LegacyImpo
         total_debt_kurus=total_debt,
         total_payment_kurus=total_payment,
         signed_net_kurus=total_debt - total_payment,
-        earliest_transaction_date=min(transaction_dates, default=None),
-        latest_transaction_date=max(transaction_dates, default=None),
+        earliest_transaction_date=earliest_transaction_date,
+        latest_transaction_date=latest_transaction_date,
         stored_summary_compared_customers=compared,
         stored_summary_matching_customers=matching,
         stored_summary_mismatching_customers=mismatching,
@@ -463,19 +691,47 @@ def read_legacy_import_plan(source_path: Path) -> LegacyImportPlan:
     suffix = source.suffix.casefold()
     if suffix not in {".exa", ".edb"}:
         raise LegacySourceError("Select a supported Veresiye 5 .exa or .edb source.")
-    digest_before = _source_digest(source)
+    if suffix == ".edb":
+        _ensure_direct_database_has_no_sidecars(source)
+        _ensure_database_size_supported(source)
+    else:
+        _ensure_exa_size_supported(source)
+    digest_before = _source_digest(
+        source,
+        size_limit=(LEGACY_DATABASE_SIZE_LIMIT if suffix == ".edb" else EXA_SOURCE_SIZE_LIMIT),
+    )
+    primary_error: BaseException | None = None
     try:
         if suffix == ".exa":
-            with tempfile.TemporaryDirectory(prefix="hesiva-legacy-import-") as directory:
-                temporary_directory = Path(directory)
-                temporary_directory.chmod(0o700)
-                database_path = recover_frm1_database(source, temporary_directory)
-                plan = _read_database(database_path, digest_before)
+            plan = _read_exa_database(source, digest_before)
         else:
+            _ensure_direct_database_has_no_sidecars(source)
             plan = _read_database(source, digest_before)
     except ExaFormatError as error:
-        raise LegacySourceError(str(error)) from error
+        source_error = LegacySourceError(str(error))
+        primary_error = source_error
+        raise source_error from error
+    except BaseException as error:
+        primary_error = error
+        raise
     finally:
-        if _source_digest(source) != digest_before:
-            raise LegacySourceError("The legacy source changed while it was being read.")
+        try:
+            if suffix == ".exa":
+                _ensure_exa_size_supported(source)
+            source_changed = (
+                _source_digest(
+                    source,
+                    size_limit=(
+                        LEGACY_DATABASE_SIZE_LIMIT if suffix == ".edb" else EXA_SOURCE_SIZE_LIMIT
+                    ),
+                )
+                != digest_before
+            )
+            if suffix == ".edb":
+                _ensure_direct_database_has_no_sidecars(source)
+            if source_changed:
+                raise LegacySourceError("The legacy source changed while it was being read.")
+        except BaseException:
+            if primary_error is None:
+                raise
     return plan

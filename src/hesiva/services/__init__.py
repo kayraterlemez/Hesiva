@@ -5,6 +5,11 @@ from hesiva.services.authentication_service import (
     create_production_password_hasher,
 )
 from hesiva.services.animal_service import AnimalService
+from hesiva.services.automatic_backup_service import (
+    AutomaticBackupResult,
+    AutomaticBackupService,
+    AutomaticBackupStatus,
+)
 from hesiva.services.backup_service import (
     BackupError,
     BackupMetadata,
@@ -12,6 +17,8 @@ from hesiva.services.backup_service import (
     BackupService,
     BackupValidationError,
     RestoreError,
+    RestoreRecoveryError,
+    RestoreRecoveryRequiredError,
     RestoreResult,
     RestoreRollbackError,
 )
@@ -54,6 +61,9 @@ __all__ = [
     "AuthenticationService",
     "AuthenticationState",
     "ApplicationSettings",
+    "AutomaticBackupResult",
+    "AutomaticBackupService",
+    "AutomaticBackupStatus",
     "BackupError",
     "BackupMetadata",
     "BackupPathError",
@@ -78,6 +88,8 @@ __all__ = [
     "ReminderService",
     "ReportService",
     "RestoreError",
+    "RestoreRecoveryError",
+    "RestoreRecoveryRequiredError",
     "RestoreResult",
     "RestoreRollbackError",
     "ServiceError",

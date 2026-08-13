@@ -168,7 +168,9 @@ Priority: Critical
 
 ### REQ-015
 
-Transaction descriptions shall remain unrestricted free text.
+Transaction descriptions shall remain unrestricted free text rather than catalog-controlled text.
+Like all persisted user-entered business text, they remain subject only to the shared 1 MiB UTF-8
+technical safety ceiling.
 
 Version 1 shall not require catalog or predefined product/service entries.
 
@@ -251,6 +253,12 @@ Priority: High
 ### REQ-022
 
 The application shall show due and overdue reminders when launched and inside the application.
+
+After authentication succeeds and the Main Window is available, Version 1 shows at most one
+startup summary containing application-wide counts for active overdue reminders and active
+reminders due on the current local date. Completed, cancelled, and future reminders are excluded.
+No startup dialog is shown when both counts are zero, and the midnight presentation refresh does
+not repeat the startup dialog.
 
 Operating-system desktop notifications are optional.
 
@@ -373,6 +381,12 @@ Version 1 shall not provide password reset, recovery, hints, default credentials
 ### REQ-031
 
 Automatic backups shall be supported.
+
+Version 1 performs one startup-time check after authentication. It creates at most one successful
+normal automatic backup per local calendar day in `<application-data>/backups` and retains verified
+normal automatic backups from the most recent 30 calendar days. Manual backups, restore safety
+backups, ambiguous files, and unrelated files are outside automatic retention. Failure does not
+block normal startup and is reported once with a concise manual-backup recommendation.
 
 Priority: Critical
 

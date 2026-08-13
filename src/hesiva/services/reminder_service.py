@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from hesiva.models._timestamps import utc_now
 from hesiva.models.customer import Customer
 from hesiva.models.reminder import Reminder
-from hesiva.read_models import ReminderSummary
+from hesiva.read_models import ReminderSummary, StartupReminderSummary
 from hesiva.repositories.customer_repository import CustomerRepository
 from hesiva.repositories.reminder_repository import ReminderRepository
 from hesiva.services._text import normalize_required_text
@@ -87,6 +87,12 @@ class ReminderService:
         if type(on_or_before) is not date:
             raise ValidationError("on_or_before must be a date.")
         return self._reminder_repository.list_due(on_or_before)
+
+    def get_startup_summary(self, reference_date: date) -> StartupReminderSummary:
+        """Return plain application-wide overdue/today counts for startup."""
+        if type(reference_date) is not date:
+            raise ValidationError("reference_date must be a date.")
+        return self._reminder_repository.get_startup_summary(reference_date)
 
     def list_records_for_customer(
         self,

@@ -1,3 +1,4 @@
+import logging
 import os
 from collections.abc import Iterator
 from datetime import date
@@ -7,8 +8,10 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt  # noqa: E402
-from PySide6.QtWidgets import QApplication, QListWidget, QPushButton  # noqa: E402
+from PySide6.QtCore import QDate, Qt  # noqa: E402
+from PySide6.QtGui import QPalette  # noqa: E402
+from PySide6.QtTest import QTest  # noqa: E402
+from PySide6.QtWidgets import QApplication, QListWidget, QMessageBox, QPushButton  # noqa: E402
 
 from hesiva.application import create_application_context  # noqa: E402
 from hesiva.composition import ApplicationContext  # noqa: E402
@@ -20,6 +23,7 @@ from hesiva.ui.report_dialogs import (  # noqa: E402
     MonthlySummaryDialog,
     YearlySummaryDialog,
 )
+from hesiva.ui.theme import APPLICATION_STYLESHEET  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -109,6 +113,7 @@ def test_report_menu_actions_are_safely_wired_to_correct_dialogs(
                 break
         application.processEvents()
         assert window.customer_statement_action.isEnabled()
+        assert window.account_history_print_button.isEnabled()
 
         opened: list[str] = []
         monkeypatch.setattr(
@@ -127,10 +132,12 @@ def test_report_menu_actions_are_safely_wired_to_correct_dialogs(
             lambda self: opened.append(self.objectName()),
         )
         window.customer_statement_action.trigger()
+        window.account_history_print_button.click()
         window.monthly_summary_action.trigger()
         window.yearly_summary_action.trigger()
 
         assert opened == [
+            "customerStatementDialog",
             "customerStatementDialog",
             "monthlySummaryDialog",
             "yearlySummaryDialog",
@@ -340,6 +347,40 @@ def test_cancelled_pdf_save_creates_no_output(
         application.processEvents()
 
 
+def test_pdf_suffix_does_not_bypass_existing_file_confirmation(
+    application: QApplication,
+    application_context: ApplicationContext,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seed_report_data(application_context)
+    dialog = MonthlySummaryDialog(application_context, reference_date=date(2026, 8, 9))
+    selected_path = tmp_path / "existing"
+    final_path = tmp_path / "existing.pdf"
+    final_path.write_bytes(b"existing report")
+    writes: list[object] = []
+    monkeypatch.setattr(
+        "hesiva.ui.report_dialogs.QFileDialog.getSaveFileName",
+        lambda *_args: (str(selected_path), "PDF Dosyaları (*.pdf)"),
+    )
+    monkeypatch.setattr(
+        "hesiva.ui.report_dialogs.QMessageBox.question",
+        lambda *_args: QMessageBox.StandardButton.No,
+    )
+    monkeypatch.setattr(
+        report_output,
+        "write_report_pdf",
+        lambda *args: writes.append(args),
+    )
+    try:
+        dialog.pdf_button.click()
+        assert writes == []
+        assert final_path.read_bytes() == b"existing report"
+    finally:
+        dialog.close()
+        application.processEvents()
+
+
 def test_export_uses_current_refreshed_report_model(
     application: QApplication,
     application_context: ApplicationContext,
@@ -376,6 +417,133 @@ def test_export_uses_current_refreshed_report_model(
         application.processEvents()
 
 
+def test_statement_calendar_change_refreshes_before_export(
+    application: QApplication,
+    application_context: ApplicationContext,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    customer_id, _ = seed_report_data(application_context)
+    dialog = CustomerStatementDialog(
+        application_context,
+        customer_id,
+        reference_date=date(2026, 8, 9),
+    )
+    exported: list[object] = []
+    target = tmp_path / "statement.pdf"
+    monkeypatch.setattr(
+        "hesiva.ui.report_dialogs.QFileDialog.getSaveFileName",
+        lambda *_args: (str(target), "PDF Dosyaları (*.pdf)"),
+    )
+    monkeypatch.setattr(
+        report_output,
+        "write_report_pdf",
+        lambda report, _path: exported.append(report),
+    )
+    try:
+        dialog.period_start_input.setDate(QDate(2026, 8, 2))
+        application.processEvents()
+        dialog.pdf_button.click()
+
+        assert dialog.statement is not None
+        assert dialog.statement.period_start == date(2026, 8, 2)
+        assert exported == [dialog.statement]
+    finally:
+        dialog.close()
+        application.processEvents()
+
+
+def test_report_filter_enter_does_not_implicitly_print_or_close(
+    application: QApplication,
+    application_context: ApplicationContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    customer_id, _ = seed_report_data(application_context)
+    dialog = CustomerStatementDialog(
+        application_context,
+        customer_id,
+        reference_date=date(2026, 8, 9),
+    )
+    printed: list[object] = []
+    monkeypatch.setattr(
+        report_output,
+        "print_report",
+        lambda report, _parent: printed.append(report) or True,
+    )
+    dialog.show()
+    application.processEvents()
+    try:
+        close_button = dialog.findChild(QPushButton, "reportCloseButton")
+        assert close_button is not None
+        for button in (dialog.print_button, dialog.pdf_button, close_button):
+            assert not button.autoDefault()
+            assert not button.isDefault()
+
+        dialog.period_start_input.setFocus()
+        QTest.keyClick(dialog.period_start_input, Qt.Key.Key_Return)
+        application.processEvents()
+
+        assert printed == []
+        assert dialog.isVisible()
+        assert dialog.result() == 0
+    finally:
+        dialog.close()
+        application.processEvents()
+
+
+@pytest.mark.parametrize("report_kind", ("statement", "monthly", "yearly"))
+def test_report_error_style_is_applied_and_cleared_after_recovery(
+    application: QApplication,
+    application_context: ApplicationContext,
+    monkeypatch: pytest.MonkeyPatch,
+    report_kind: str,
+) -> None:
+    customer_id, _ = seed_report_data(application_context)
+    if report_kind == "statement":
+        dialog = CustomerStatementDialog(
+            application_context,
+            customer_id,
+            reference_date=date(2026, 8, 9),
+        )
+        service_method_name = "get_customer_statement"
+        refresh = dialog.refresh_statement
+    elif report_kind == "monthly":
+        dialog = MonthlySummaryDialog(application_context, reference_date=date(2026, 8, 9))
+        service_method_name = "get_monthly_summary"
+        refresh = dialog.refresh_summary
+    else:
+        dialog = YearlySummaryDialog(application_context, reference_date=date(2026, 8, 9))
+        service_method_name = "get_yearly_summary"
+        refresh = dialog.refresh_summary
+    dialog.setStyleSheet(APPLICATION_STYLESHEET)
+    dialog.show()
+    application.processEvents()
+    original_service_method = getattr(ReportService, service_method_name)
+
+    def fail_read(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("synthetic read failure")
+
+    try:
+        monkeypatch.setattr(ReportService, service_method_name, fail_read)
+        refresh()
+        application.processEvents()
+        assert dialog.state_label.property("errorMessage")
+        assert dialog.state_label.palette().color(QPalette.ColorRole.WindowText).name() == "#b4232e"
+
+        monkeypatch.setattr(
+            ReportService,
+            service_method_name,
+            original_service_method,
+        )
+        refresh()
+        application.processEvents()
+        assert not dialog.state_label.property("errorMessage")
+        assert dialog.state_label.palette().color(QPalette.ColorRole.WindowText).name() == "#263442"
+    finally:
+        dialog.close()
+        application.processEvents()
+
+
 def test_pdf_write_error_is_user_facing_and_does_not_report_success(
     application: QApplication,
     application_context: ApplicationContext,
@@ -407,6 +575,51 @@ def test_pdf_write_error_is_user_facing_and_does_not_report_success(
             )
         ]
         assert "disk details" not in warnings[0][1]
+    finally:
+        dialog.close()
+        application.processEvents()
+
+
+def test_report_failures_do_not_log_private_paths_or_database_parameters(
+    application: QApplication,
+    application_context: ApplicationContext,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    customer_id, _ = seed_report_data(application_context)
+    dialog = CustomerStatementDialog(
+        application_context,
+        customer_id,
+        reference_date=date(2026, 8, 9),
+    )
+    private_name = "PRIVATE CUSTOMER NAME"
+    private_path = tmp_path / f"{private_name}.pdf"
+    monkeypatch.setattr(
+        "hesiva.ui.report_dialogs.QFileDialog.getSaveFileName",
+        lambda *_args: (str(private_path), "PDF Dosyaları (*.pdf)"),
+    )
+    monkeypatch.setattr(
+        report_output,
+        "write_report_pdf",
+        lambda *_args: (_ for _ in ()).throw(
+            report_output.ReportOutputError(
+                f"[SQL: INSERT] [parameters: ('{private_name}',)] {private_path}"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "hesiva.ui.report_dialogs.QMessageBox.warning",
+        lambda *_args: QMessageBox.Ok,
+    )
+    try:
+        with caplog.at_level(logging.ERROR, logger="hesiva.ui.report_dialogs"):
+            dialog.pdf_button.click()
+        log_text = caplog.text
+        assert "ReportOutputError" in log_text
+        assert private_name not in log_text
+        assert str(private_path) not in log_text
+        assert "parameters" not in log_text
     finally:
         dialog.close()
         application.processEvents()

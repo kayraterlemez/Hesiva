@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (  # noqa: E402
 
 from hesiva.application import create_application_context  # noqa: E402
 from hesiva.composition import ApplicationContext  # noqa: E402
+from hesiva.financial_integrity import SQLITE_SIGNED_INTEGER_MAX  # noqa: E402
 from hesiva.services import AccountHistoryService, ValidationError  # noqa: E402
 from hesiva.ui.financial_dialogs import (  # noqa: E402
     DebtTransactionDialog,
@@ -99,6 +100,14 @@ def test_money_parser_accepts_strict_turkish_positive_magnitudes(
 def test_money_parser_rejects_blank_zero_negative_and_malformed_values(value: str) -> None:
     with pytest.raises(MoneyInputError):
         parse_money_kurus(value)
+
+
+def test_money_parser_enforces_sqlite_range_before_unbounded_integer_conversion() -> None:
+    assert parse_money_kurus("92233720368547758,07") == SQLITE_SIGNED_INTEGER_MAX
+
+    for value in ("92233720368547758,08", "9" * 4301):
+        with pytest.raises(MoneyInputError, match="para aralığını"):
+            parse_money_kurus(value)
 
 
 def test_dialog_fields_follow_frozen_debt_and_payment_contracts(

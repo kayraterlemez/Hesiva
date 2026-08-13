@@ -84,6 +84,7 @@ class LegacyImportDialog(QDialog):
         self._operation_kind: str | None = None
         self._operation_thread: QThread | None = None
         self._operation_worker: _LegacyImportWorker | None = None
+        self._override_cursor_active = False
         self.setWindowTitle("Eski Verileri İçe Aktar")
         self.setObjectName("legacyImportDialog")
         self.setModal(True)
@@ -331,7 +332,6 @@ class LegacyImportDialog(QDialog):
             self.source_error_label.show()
             return
         self._set_busy(True)
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         self._start_operation("analysis", expected_source_sha256=None)
 
     def _populate_preflight(self, preflight: LegacyImportPreflight) -> None:
@@ -365,8 +365,6 @@ class LegacyImportDialog(QDialog):
         self._set_busy(True)
         self.progress_bar.setValue(0)
         self.progress_status.setText("Kaynak yeniden doğrulanıyor...")
-        QApplication.processEvents()
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         self._start_operation(
             "import",
             expected_source_sha256=self.preflight.source_sha256,
@@ -393,7 +391,20 @@ class LegacyImportDialog(QDialog):
         thread.finished.connect(thread.deleteLater)
         self._operation_thread = thread
         self._operation_worker = worker
-        thread.start()
+        try:
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            self._override_cursor_active = True
+            thread.start()
+        except Exception as error:
+            LOGGER.error(
+                "Legacy import worker could not be started: %s",
+                type(error).__name__,
+            )
+            self._operation_kind = None
+            self._operation_worker = None
+            self._operation_thread = None
+            self._release_operation_ui()
+            self._show_failure("Veresiye 5 kaynağı güvenli şekilde işlenemedi.")
 
     @Slot(str)
     def _operation_progressed(self, phase: str) -> None:
@@ -437,11 +448,16 @@ class LegacyImportDialog(QDialog):
 
     @Slot()
     def _operation_finished(self) -> None:
-        QApplication.restoreOverrideCursor()
-        self._set_busy(False)
+        self._release_operation_ui()
         self._operation_kind = None
         self._operation_worker = None
         self._operation_thread = None
+
+    def _release_operation_ui(self) -> None:
+        if self._override_cursor_active:
+            QApplication.restoreOverrideCursor()
+            self._override_cursor_active = False
+        self._set_busy(False)
 
     def _show_failure(self, message: str) -> None:
         self.import_result = None
@@ -483,3 +499,26 @@ class LegacyImportDialog(QDialog):
             event.ignore()
             return
         super().closeEvent(event)
+
+    def reject(self) -> None:
+        if self._busy:
+            return
+        super().reject()
+
+    def done(self, result: int) -> None:
+        if self._busy:
+            return
+        super().done(result)
+
+    def wait_for_active_operation(self) -> None:
+        """Drain an operation if the application event loop is exiting unexpectedly."""
+        thread = self._operation_thread
+        if thread is None:
+            return
+        if thread.isRunning():
+            thread.quit()
+            thread.wait()
+        self._release_operation_ui()
+        self._operation_kind = None
+        self._operation_worker = None
+        self._operation_thread = None

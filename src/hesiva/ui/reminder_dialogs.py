@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from hesiva.read_models import ReminderSummary
+from hesiva.read_models import ReminderSummary, StartupReminderSummary
 from hesiva.ui.presentation import format_date
 
 
@@ -24,6 +24,68 @@ class ReminderFormValues:
 
     remind_on: date
     note: str
+
+
+class StartupReminderSummaryDialog(QDialog):
+    """One non-destructive startup summary for application-wide due reminders."""
+
+    def __init__(
+        self,
+        summary: StartupReminderSummary,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("startupReminderSummaryDialog")
+        self.setWindowTitle("Hatırlatmalar")
+        self.setModal(True)
+        self.setMinimumWidth(430)
+
+        heading = QLabel("Hatırlatmalar", self)
+        heading.setObjectName("startupReminderHeading")
+        heading.setProperty("dialogHeading", True)
+
+        self.overdue_count_label = QLabel(
+            f"{summary.overdue_count} gecikmiş hatırlatma",
+            self,
+        )
+        self.overdue_count_label.setObjectName("startupOverdueCountLabel")
+        self.overdue_count_label.setProperty("reminderState", "overdue")
+        self.today_count_label = QLabel(
+            f"{summary.today_count} bugün yapılacak hatırlatma",
+            self,
+        )
+        self.today_count_label.setObjectName("startupTodayCountLabel")
+        self.today_count_label.setProperty("reminderState", "today")
+        question = QLabel("Hatırlatmaları görüntülemek ister misiniz?", self)
+        question.setWordWrap(True)
+
+        buttons = QDialogButtonBox(self)
+        self.open_button = buttons.addButton(
+            "Hatırlatmaları Aç",
+            QDialogButtonBox.ButtonRole.AcceptRole,
+        )
+        self.open_button.setObjectName("openStartupRemindersButton")
+        self.close_button = buttons.addButton(
+            "Kapat",
+            QDialogButtonBox.ButtonRole.RejectRole,
+        )
+        self.close_button.setObjectName("closeStartupRemindersButton")
+        self.open_button.clicked.connect(self.accept)
+        self.close_button.clicked.connect(self.reject)
+        self.close_button.setDefault(True)
+        self.close_button.setFocus()
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(22, 20, 22, 18)
+        layout.setSpacing(12)
+        layout.addWidget(heading)
+        layout.addWidget(self.overdue_count_label)
+        layout.addWidget(self.today_count_label)
+        layout.addSpacing(4)
+        layout.addWidget(question)
+        layout.addWidget(buttons)
+
+        QWidget.setTabOrder(self.close_button, self.open_button)
 
 
 class ReminderFormDialog(QDialog):

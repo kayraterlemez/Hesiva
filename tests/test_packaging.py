@@ -1,5 +1,6 @@
 import configparser
 import runpy
+import shutil
 import tomllib
 from pathlib import Path
 
@@ -195,6 +196,199 @@ def test_debian_metadata_and_build_layout_are_authoritative() -> None:
     assert "prerm" not in build_script
     assert ".local/share/hesiva" not in build_script
     assert "XDG_DATA_HOME" not in build_script
+
+
+def _create_provenance_fixture(repository_root: Path) -> None:
+    (repository_root / "src/hesiva").mkdir(parents=True)
+    (repository_root / "src/hesiva/example.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (repository_root / "assets").mkdir()
+    (repository_root / "assets/hesiva-icon.png").write_bytes(b"synthetic-icon")
+    (repository_root / "packaging").mkdir()
+    (repository_root / "packaging/Hesiva.spec").write_text("# spec\n", encoding="utf-8")
+    (repository_root / "packaging/pyinstaller_support.py").write_text(
+        "# support\n",
+        encoding="utf-8",
+    )
+    (repository_root / "packaging/icons/hicolor/16x16/apps").mkdir(parents=True)
+    (repository_root / "packaging/icons/hesiva.ico").write_bytes(b"synthetic-windows-icon")
+    (repository_root / "packaging/icons/hicolor/16x16/apps/hesiva.png").write_bytes(
+        b"synthetic-linux-icon"
+    )
+    (repository_root / "packaging/linux").mkdir()
+    (repository_root / "packaging/linux/hesiva").write_text("#!/bin/sh\n", encoding="utf-8")
+    (repository_root / "packaging/debian").mkdir()
+    (repository_root / "packaging/debian/control.in").write_text(
+        "Package: hesiva\n",
+        encoding="utf-8",
+    )
+    (repository_root / "LICENSE").write_text("Synthetic fixture license\n", encoding="utf-8")
+    (repository_root / "pyproject.toml").write_text(
+        '[project]\nname = "hesiva"\nversion = "0.1.0"\n',
+        encoding="utf-8",
+    )
+
+
+def test_frozen_artifact_provenance_rejects_source_and_runtime_drift(tmp_path: Path) -> None:
+    provenance = runpy.run_path(str(REPOSITORY_ROOT / "packaging/artifact_provenance.py"))
+    repository_root = tmp_path / "repository"
+    _create_provenance_fixture(repository_root)
+    runtime = repository_root / "dist/Hesiva"
+    runtime.mkdir(parents=True)
+    executable = runtime / "Hesiva"
+    executable.write_bytes(b"frozen-runtime")
+    executable.chmod(0o755)
+    manifest = repository_root / "dist/Hesiva.provenance.json"
+
+    expected_source = provenance["source_digest"](repository_root)
+    provenance["record_manifest"](
+        expected_source_sha256=expected_source,
+        repository_root=repository_root,
+        runtime_path=runtime,
+        manifest_path=manifest,
+    )
+    provenance["verify_manifest"](
+        repository_root=repository_root,
+        runtime_path=runtime,
+        manifest_path=manifest,
+    )
+
+    icon_mutations = (
+        (repository_root / "packaging/icons/hesiva.ico", b"changed-windows-icon"),
+        (
+            repository_root / "packaging/icons/hicolor/16x16/apps/hesiva.png",
+            b"changed-linux-icon",
+        ),
+    )
+    for icon_path, changed_content in icon_mutations:
+        original_content = icon_path.read_bytes()
+        icon_path.write_bytes(changed_content)
+        with pytest.raises(provenance["ProvenanceError"], match="stale source"):
+            provenance["verify_manifest"](
+                repository_root=repository_root,
+                runtime_path=runtime,
+                manifest_path=manifest,
+            )
+        icon_path.write_bytes(original_content)
+
+    staged_runtime = tmp_path / "staged-runtime"
+    shutil.copytree(runtime, staged_runtime, symlinks=True)
+    provenance["verify_manifest"](
+        repository_root=repository_root,
+        runtime_path=staged_runtime,
+        manifest_path=manifest,
+    )
+
+    (repository_root / "src/hesiva/example.py").write_text("VALUE = 2\n", encoding="utf-8")
+    with pytest.raises(provenance["ProvenanceError"], match="stale source"):
+        provenance["verify_manifest"](
+            repository_root=repository_root,
+            runtime_path=runtime,
+            manifest_path=manifest,
+        )
+
+    (repository_root / "src/hesiva/example.py").write_text("VALUE = 1\n", encoding="utf-8")
+    executable.write_bytes(b"substituted-runtime")
+    with pytest.raises(provenance["ProvenanceError"], match="contents differ"):
+        provenance["verify_manifest"](
+            repository_root=repository_root,
+            runtime_path=runtime,
+            manifest_path=manifest,
+        )
+
+
+def test_build_provenance_rejects_source_changes_during_build(tmp_path: Path) -> None:
+    provenance = runpy.run_path(str(REPOSITORY_ROOT / "packaging/artifact_provenance.py"))
+    repository_root = tmp_path / "repository"
+    _create_provenance_fixture(repository_root)
+    runtime = repository_root / "dist/Hesiva"
+    runtime.mkdir(parents=True)
+    (runtime / "Hesiva").write_bytes(b"frozen-runtime")
+    manifest = repository_root / "dist/Hesiva.provenance.json"
+    source_before_build = provenance["source_digest"](repository_root)
+
+    (repository_root / "src/hesiva/example.py").write_text("VALUE = 2\n", encoding="utf-8")
+
+    with pytest.raises(provenance["ProvenanceError"], match="changed while"):
+        provenance["record_manifest"](
+            expected_source_sha256=source_before_build,
+            repository_root=repository_root,
+            runtime_path=runtime,
+            manifest_path=manifest,
+        )
+    assert not manifest.exists()
+
+
+@pytest.mark.parametrize("preexisting_manifest", (None, b"previous manifest\n"))
+def test_build_provenance_rechecks_source_after_hashing_runtime(
+    tmp_path: Path,
+    preexisting_manifest: bytes | None,
+) -> None:
+    provenance = runpy.run_path(str(REPOSITORY_ROOT / "packaging/artifact_provenance.py"))
+    repository_root = tmp_path / "repository"
+    _create_provenance_fixture(repository_root)
+    runtime = repository_root / "dist/Hesiva"
+    runtime.mkdir(parents=True)
+    (runtime / "Hesiva").write_bytes(b"frozen-runtime")
+    manifest = repository_root / "dist/Hesiva.provenance.json"
+    if preexisting_manifest is not None:
+        manifest.write_bytes(preexisting_manifest)
+    source_path = repository_root / "src/hesiva/example.py"
+    source_before_build = provenance["source_digest"](repository_root)
+    real_runtime_digest = provenance["runtime_digest"]
+
+    def mutate_source_after_runtime_hash(runtime_path: Path) -> str:
+        digest = real_runtime_digest(runtime_path)
+        source_path.write_text("VALUE = 2\n", encoding="utf-8")
+        return digest
+
+    provenance["record_manifest"].__globals__["runtime_digest"] = mutate_source_after_runtime_hash
+
+    with pytest.raises(provenance["ProvenanceError"], match="provenance was being recorded"):
+        provenance["record_manifest"](
+            expected_source_sha256=source_before_build,
+            repository_root=repository_root,
+            runtime_path=runtime,
+            manifest_path=manifest,
+        )
+
+    if preexisting_manifest is None:
+        assert not manifest.exists()
+    else:
+        assert manifest.read_bytes() == preexisting_manifest
+
+
+def test_release_scripts_require_and_preserve_verified_artifact_provenance() -> None:
+    linux_build = (REPOSITORY_ROOT / "scripts/build_linux.sh").read_text(encoding="utf-8")
+    debian_build = (REPOSITORY_ROOT / "scripts/build_deb.sh").read_text(encoding="utf-8")
+    smoke = (REPOSITORY_ROOT / "scripts/smoke_packaged_linux.sh").read_text(encoding="utf-8")
+
+    assert linux_build.index("artifact_provenance.py invalidate") < linux_build.index(
+        "-m PyInstaller"
+    )
+    assert linux_build.index("-m PyInstaller") < linux_build.index("artifact_provenance.py record")
+    assert linux_build.index("artifact_provenance.py record") < linux_build.index(
+        "artifact_provenance.py verify"
+    )
+    assert "Kullanım: scripts/build_linux.sh [--build-only]" in linux_build
+    first_verification = debian_build.index("artifact_provenance.py verify")
+    runtime_copy = debian_build.index('cp -a "$runtime_source/."')
+    staged_verification = debian_build.index(
+        "artifact_provenance.py verify",
+        first_verification + 1,
+    )
+    assert first_verification < runtime_copy < staged_verification
+    assert 'if [[ ! -x "$runtime_source/Hesiva"' not in debian_build
+    assert smoke.count("artifact_provenance.py verify") == 2
+    assert "QT_LOGGING_RULES='qt.qpa.backingstore=true'" in smoke
+    assert "grep -q '^qt.qpa.backingstore:'" in smoke
+    assert "Hesiva authenticated startup failed" in smoke
+    assert "PRAGMA integrity_check" in smoke
+    assert "SELECT version_num FROM alembic_version" in smoke
+
+    runtime_smoke = (REPOSITORY_ROOT / "packaging/runtime_smoke.py").read_text(encoding="utf-8")
+    assert "configure_application_theme(application)" in runtime_smoke
+    assert 'application.setStyleSheet("")' in runtime_smoke
+    assert 'application.style().objectName().casefold() == "fusion"' in runtime_smoke
 
 
 def test_packaging_sources_contain_no_developer_home_path() -> None:

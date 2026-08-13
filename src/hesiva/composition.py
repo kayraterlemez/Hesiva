@@ -1,12 +1,14 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 from argon2 import PasswordHasher
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
+from hesiva.application_data_lock import ApplicationDataLock
 from hesiva.database.engine import create_sqlite_engine
 from hesiva.database.paths import get_config_path
 from hesiva.database.session import create_session_factory
@@ -22,6 +24,8 @@ from hesiva.repositories import (
 from hesiva.services import (
     AccountHistoryService,
     AnimalService,
+    AutomaticBackupResult,
+    AutomaticBackupService,
     AuthenticationService,
     BackupMetadata,
     BackupService,
@@ -32,6 +36,8 @@ from hesiva.services import (
     ReminderService,
     ReportService,
     RestoreResult,
+    RestoreRecoveryRequiredError,
+    RestoreRollbackError,
     SettingsService,
     TransactionService,
 )
@@ -61,13 +67,16 @@ class ApplicationContext:
     session_factory: sessionmaker[Session]
     configuration_store: ConfigurationStore
     authentication: AuthenticationService
+    application_data_lock: ApplicationDataLock = field(repr=False)
     _active_service_scopes: int = field(default=0, init=False, repr=False)
     _database_available: bool = field(default=True, init=False, repr=False)
     _backup_service: BackupService = field(init=False, repr=False)
+    _automatic_backup_service: AutomaticBackupService = field(init=False, repr=False)
     settings: SettingsService = field(init=False)
 
     def __post_init__(self) -> None:
         self._backup_service = BackupService(self.database_path, self.configuration_store)
+        self._automatic_backup_service = AutomaticBackupService(self._backup_service)
         self.settings = SettingsService(
             self.configuration_store,
             self._backup_service.default_backup_directory,
@@ -116,6 +125,16 @@ class ApplicationContext:
         """Create a verified backup while keeping the application database open."""
         return self._backup_service.create_backup(destination_path)
 
+    def run_automatic_backup(
+        self,
+        *,
+        reference_datetime: datetime | None = None,
+    ) -> AutomaticBackupResult:
+        """Run the once-per-application daily automatic-backup policy."""
+        return self._automatic_backup_service.run_daily_backup(
+            reference_datetime=reference_datetime,
+        )
+
     def prepare_default_backup_directory(self) -> Path:
         """Return the ready documented local fallback backup directory."""
         return self._backup_service.prepare_default_backup_directory()
@@ -135,15 +154,42 @@ class ApplicationContext:
         """Restore a verified backup through the context-owned engine lifecycle."""
         if self._active_service_scopes:
             raise RuntimeError("Restore cannot run while a service scope is active.")
-        return self._backup_service.restore_backup(
-            backup_path,
-            close_live_database=self._close_database_for_restore,
-            reopen_live_database=self._reopen_database_after_restore,
-        )
+        try:
+            return self._backup_service.restore_backup(
+                backup_path,
+                close_live_database=self._close_database_for_restore,
+                reopen_live_database=self._reopen_database_after_restore,
+            )
+        except Exception as error:
+            if isinstance(error, (RestoreRecoveryRequiredError, RestoreRollbackError)) or (
+                self._restore_recovery_may_be_pending()
+            ):
+                self._disable_database_until_restart(error)
+            raise
 
     def _close_database_for_restore(self) -> None:
-        self.engine.dispose()
         self._database_available = False
+        self.engine.dispose()
+
+    def _disable_database_until_restart(self, primary_error: BaseException) -> None:
+        """Prevent acknowledged writes while startup recovery may still be pending."""
+        self._database_available = False
+        try:
+            self.engine.dispose()
+        except Exception as cleanup_error:
+            primary_error.add_note(
+                "The live database engine could not be fully disposed after a restore "
+                f"recovery failure: {type(cleanup_error).__name__}."
+            )
+
+    def _restore_recovery_may_be_pending(self) -> bool:
+        try:
+            self._backup_service.restore_journal_path.lstat()
+        except FileNotFoundError:
+            return False
+        except OSError:
+            return True
+        return True
 
     def _reopen_database_after_restore(self) -> None:
         engine = create_sqlite_engine(self.database_path)
@@ -158,14 +204,18 @@ class ApplicationContext:
         self._database_available = True
 
     def close(self) -> None:
-        """Release pooled database connections owned by the application."""
+        """Release database resources, then relinquish application-data ownership."""
+        if self._active_service_scopes:
+            raise RuntimeError("The application context cannot close with active service scopes.")
         self.engine.dispose()
         self._database_available = False
+        self.application_data_lock.release()
 
 
 def build_application_context(
     database_path: Path,
     *,
+    application_data_lock: ApplicationDataLock,
     password_hasher: PasswordHasher | None = None,
 ) -> ApplicationContext:
     """Open the initialized database and build application-level dependencies."""
@@ -173,15 +223,15 @@ def build_application_context(
     try:
         with engine.connect() as connection:
             connection.scalar(text("SELECT 1"))
+        configuration_store = ConfigurationStore(get_config_path(database_path.parent))
+        return ApplicationContext(
+            database_path=database_path,
+            engine=engine,
+            session_factory=create_session_factory(engine),
+            configuration_store=configuration_store,
+            authentication=AuthenticationService(configuration_store, password_hasher),
+            application_data_lock=application_data_lock,
+        )
     except Exception:
         engine.dispose()
         raise
-
-    configuration_store = ConfigurationStore(get_config_path(database_path.parent))
-    return ApplicationContext(
-        database_path=database_path,
-        engine=engine,
-        session_factory=create_session_factory(engine),
-        configuration_store=configuration_store,
-        authentication=AuthenticationService(configuration_store, password_hasher),
-    )

@@ -2,6 +2,10 @@ from datetime import date, time
 
 from sqlalchemy.orm import Session
 
+from hesiva.financial_integrity import (
+    FinancialIntegrityError,
+    validate_positive_magnitude,
+)
 from hesiva.models._timestamps import utc_now
 from hesiva.models.animal import Animal
 from hesiva.models.customer import Customer
@@ -149,6 +153,13 @@ class TransactionService:
         )
 
         try:
+            self._transaction_repository.active_financial_totals().including(amount_kurus)
+        except FinancialIntegrityError as error:
+            raise ValidationError(
+                "amount_kurus exceeds the supported exact financial range."
+            ) from error
+
+        try:
             self._transaction_repository.add(transaction)
             self._session.commit()
         except Exception:
@@ -185,6 +196,7 @@ class TransactionService:
 
     @staticmethod
     def _validate_amount_magnitude(amount_kurus: int) -> int:
-        if type(amount_kurus) is not int or amount_kurus <= 0:
-            raise ValidationError("amount_kurus must be a positive integer magnitude.")
-        return amount_kurus
+        try:
+            return validate_positive_magnitude(amount_kurus)
+        except FinancialIntegrityError as error:
+            raise ValidationError("amount_kurus must be a positive integer magnitude.") from error

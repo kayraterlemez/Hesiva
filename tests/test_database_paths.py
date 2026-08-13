@@ -3,6 +3,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+import hesiva.database.paths as paths_module
+
 from hesiva.database.paths import (
     CONFIG_FILENAME,
     DATABASE_FILENAME,
@@ -55,8 +59,17 @@ def test_windows_data_directory_uses_local_app_data(tmp_path: Path) -> None:
     assert not local_app_data.exists()
 
 
-def test_database_path_and_directory_creation_are_explicit(tmp_path: Path) -> None:
+def test_database_path_and_directory_creation_are_explicit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     data_directory = tmp_path / "application-data"
+    synced_directory_entries: list[Path] = []
+    monkeypatch.setattr(
+        paths_module,
+        "sync_parent_directory",
+        synced_directory_entries.append,
+    )
 
     database_path = get_production_database_path(data_directory)
     config_path = get_config_path(data_directory)
@@ -68,6 +81,8 @@ def test_database_path_and_directory_creation_are_explicit(tmp_path: Path) -> No
     assert not data_directory.exists()
     assert ensure_application_data_directory(data_directory) == data_directory
     assert data_directory.is_dir()
+    if os.name == "posix":
+        assert synced_directory_entries == [data_directory]
     if os.name == "posix":
         assert data_directory.stat().st_mode & 0o777 == 0o700
 

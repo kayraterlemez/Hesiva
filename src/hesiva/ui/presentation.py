@@ -5,6 +5,7 @@ from collections.abc import Iterable
 from datetime import date, time
 from enum import StrEnum
 
+from hesiva.financial_integrity import SQLITE_SIGNED_INTEGER_MAX
 from hesiva.read_models import ReminderSummary
 
 TURKISH_MONTH_NAMES = (
@@ -55,11 +56,18 @@ def parse_money_kurus(value: str) -> int:
     if separator and re.fullmatch(r"\d{1,2}", fraction_part) is None:
         raise MoneyInputError("Kuruş en fazla iki basamak olmalıdır.")
 
-    lira = int(whole_part.replace(".", ""))
+    whole_digits = whole_part.replace(".", "")
+    maximum_lira_digits = len(str(SQLITE_SIGNED_INTEGER_MAX // 100))
+    if len(whole_digits) > maximum_lira_digits:
+        raise MoneyInputError("Tutar desteklenen para aralığını aşıyor.")
+
+    lira = int(whole_digits)
     kurus = int(fraction_part.ljust(2, "0")) if separator else 0
     amount_kurus = lira * 100 + kurus
     if amount_kurus <= 0:
         raise MoneyInputError("Tutar sıfırdan büyük olmalıdır.")
+    if amount_kurus > SQLITE_SIGNED_INTEGER_MAX:
+        raise MoneyInputError("Tutar desteklenen para aralığını aşıyor.")
     return amount_kurus
 
 

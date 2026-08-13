@@ -1,6 +1,10 @@
 from sqlalchemy import Select, case, func, select
 from sqlalchemy.orm import Session
 
+from hesiva.financial_integrity import (
+    ActiveFinancialTotals,
+    calculate_active_financial_totals,
+)
 from hesiva.models.animal import Animal
 from hesiva.models.customer import Customer
 from hesiva.models.transaction import Transaction
@@ -50,6 +54,14 @@ class TransactionRepository:
             Transaction.voided_at.is_(None),
         )
         return int(self._session.scalar(statement))
+
+    def active_financial_totals(self) -> ActiveFinancialTotals:
+        statement = (
+            select(Transaction.amount_kurus)
+            .where(Transaction.voided_at.is_(None))
+            .execution_options(yield_per=1000)
+        )
+        return calculate_active_financial_totals(self._session.scalars(statement))
 
     def list_active_customer_history(
         self,

@@ -221,6 +221,7 @@ def test_settings_password_change_uses_existing_authenticated_flow(
 
     assert context.authentication.verify_password("yeni")
     assert not context.authentication.verify_password("eski")
+    context.close()
     reopened = create_application_context(
         context.database_path.parent,
         password_hasher=fast_hasher,
