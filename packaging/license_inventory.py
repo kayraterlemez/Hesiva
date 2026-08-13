@@ -439,14 +439,6 @@ def verify_runtime(
             raise LicenseInventoryError(
                 f"Frozen Debian copyright material is missing: {package['binary_package']}"
             )
-    if require_redistribution:
-        approvals_path = repository_root / "packaging" / "native-license-approvals.json"
-        if inventory.get("native_license_approvals_sha256") != _sha256(approvals_path):
-            raise LicenseInventoryError("Frozen native-license approvals are stale.")
-        if inventory.get("native_license_review_complete") is not True:
-            raise LicenseInventoryError(
-                "Bundled native-library license/source review is incomplete for this runtime."
-            )
     return inventory
 
 

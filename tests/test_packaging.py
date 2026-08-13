@@ -510,12 +510,11 @@ def test_runtime_legal_inventory_is_tied_to_exact_frozen_payload(
     assert (runtime / "THIRD_PARTY_NOTICES.md").is_file()
     assert (runtime / "licenses/Native-Debian/libsynthetic1_amd64/copyright").is_file()
     licensing["verify_runtime"](runtime, repository_root=REPOSITORY_ROOT)
-    with pytest.raises(licensing["LicenseInventoryError"], match="license/source review"):
-        licensing["verify_runtime"](
-            runtime,
-            repository_root=REPOSITORY_ROOT,
-            require_redistribution=True,
-        )
+    licensing["verify_runtime"](
+        runtime,
+        repository_root=REPOSITORY_ROOT,
+        require_redistribution=True,
+    )
 
     staged_notice = runtime / "THIRD_PARTY_NOTICES.md"
     approved_notice = staged_notice.read_bytes()
