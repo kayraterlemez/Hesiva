@@ -253,7 +253,10 @@ def _native_debian_inventory(
             "Redistributable Linux staging requires dpkg-query on the Debian-family build host."
         )
     root = repository_root.resolve()
-    environment_root = Path(sys.prefix).resolve()
+    environment_roots = {
+        Path(sys.prefix).resolve(),
+        Path(sys.base_prefix).resolve(),
+    }
     package_sources: dict[str, dict[str, Any]] = {}
     copyright_files: dict[str, Path] = {}
     for _destination, raw_source, entry_type, runtime_path in entries:
@@ -263,7 +266,7 @@ def _native_debian_inventory(
         resolved_source = source.resolve(strict=False)
         if any(
             _is_relative_to(resolved_source, excluded_root)
-            for excluded_root in (root, environment_root)
+            for excluded_root in (root, *environment_roots)
         ):
             continue
         owner = _debian_owner(resolved_source)

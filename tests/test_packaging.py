@@ -334,6 +334,75 @@ def test_native_inventory_records_resolved_internal_runtime_path(
     assert packages[0]["runtime_entries"] == ["_internal/libnative.so.1"]
 
 
+def test_native_debian_inventory_excludes_base_python_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    licensing = _load_license_inventory()
+
+    repository_root = tmp_path / "repository"
+    repository_root.mkdir()
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+
+    base_prefix = tmp_path / "pyenv-python"
+    libpython = base_prefix / "lib/libpython3.13.so.1.0"
+    libpython.parent.mkdir(parents=True)
+    libpython.write_bytes(b"python runtime")
+
+    runtime_library = runtime / "_internal/libpython3.13.so.1.0"
+    runtime_library.parent.mkdir(parents=True)
+    runtime_library.write_bytes(b"bundled")
+
+    owner_calls: list[Path] = []
+
+    def fake_owner(path: Path) -> dict[str, str]:
+        owner_calls.append(path)
+        raise AssertionError(
+            "Base Python runtime must not be queried as a Debian-owned native library."
+        )
+
+    globals_ = licensing["_native_debian_inventory"].__globals__
+    monkeypatch.setitem(globals_, "_debian_owner", fake_owner)
+    monkeypatch.setattr(
+        globals_["shutil"],
+        "which",
+        lambda _name: "/usr/bin/dpkg-query",
+    )
+    monkeypatch.setattr(
+        globals_["sys"],
+        "prefix",
+        str(tmp_path / "venv"),
+    )
+    monkeypatch.setattr(
+        globals_["sys"],
+        "base_prefix",
+        str(base_prefix),
+    )
+
+    entries = [
+        (
+            "libpython3.13.so.1.0",
+            str(libpython),
+            "BINARY",
+            runtime_library,
+        )
+    ]
+
+    with pytest.raises(
+        licensing["LicenseInventoryError"],
+        match="No Debian-owned bundled native files",
+    ):
+        licensing["_native_debian_inventory"](
+            entries,
+            repository_root,
+            runtime,
+        )
+
+    assert owner_calls == []
+
+
 def test_native_debian_inventory_resolves_source_before_owner_lookup(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
