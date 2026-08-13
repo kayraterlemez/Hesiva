@@ -3,6 +3,7 @@ import logging
 from collections.abc import Callable, Iterator
 from datetime import date, time
 from pathlib import Path
+from time import monotonic
 
 import pytest
 
@@ -90,6 +91,28 @@ def item_for_customer(customer_list: QListWidget, customer_id: int) -> QListWidg
         if item.data(Qt.ItemDataRole.UserRole) == customer_id:
             return item
     raise AssertionError(f"Customer {customer_id} is not visible")
+
+
+def wait_for_customer_ids(
+    application: QApplication,
+    customer_list: QListWidget,
+    expected_ids: list[int],
+    *,
+    timeout_seconds: float = 2.0,
+) -> None:
+    deadline = monotonic() + timeout_seconds
+    while monotonic() < deadline:
+        application.processEvents()
+        if customer_ids(customer_list) == expected_ids:
+            return
+        QTest.qWait(10)
+    application.processEvents()
+    if customer_ids(customer_list) != expected_ids:
+        pytest.fail(
+            "Customer list did not reach the expected state within "
+            f"{timeout_seconds:.1f} seconds: expected {expected_ids}, "
+            f"found {customer_ids(customer_list)}"
+        )
 
 
 def test_main_window_has_frozen_shell_structure(main_window: MainWindow) -> None:
@@ -382,12 +405,16 @@ def test_search_and_sort_refresh_preserve_selection_by_customer_id(
     assert customer_list.currentItem().data(Qt.ItemDataRole.UserRole) == second_duplicate_id
 
     window.customer_search_input.setText("  Match  ")
-    QTest.qWait(250)
+    wait_for_customer_ids(
+        application,
+        customer_list,
+        [first_duplicate_id, second_duplicate_id],
+    )
     assert customer_ids(customer_list) == [first_duplicate_id, second_duplicate_id]
     assert customer_list.currentItem().data(Qt.ItemDataRole.UserRole) == second_duplicate_id
 
     window.customer_search_input.setText("Other")
-    QTest.qWait(250)
+    wait_for_customer_ids(application, customer_list, [other_customer_id])
     assert customer_ids(customer_list) == [other_customer_id]
     assert customer_list.currentItem() is None
     assert window.customer_detail_stack.currentWidget() is window.no_customer_selected_state
@@ -396,7 +423,11 @@ def test_search_and_sort_refresh_preserve_selection_by_customer_id(
     assert window.customer_count_label.text() == "Bulunan: 1 müşteri"
 
     window.customer_search_input.clear()
-    QTest.qWait(250)
+    wait_for_customer_ids(
+        application,
+        customer_list,
+        [first_duplicate_id, second_duplicate_id, other_customer_id],
+    )
     assert customer_ids(customer_list) == [
         first_duplicate_id,
         second_duplicate_id,
