@@ -4,7 +4,8 @@ from pathlib import Path
 
 def sync_file(file_path: Path) -> None:
     """Flush one completed file to durable storage where supported."""
-    with file_path.open("rb") as file_handle:
+    mode = "r+b" if os.name == "nt" else "rb"
+    with file_path.open(mode) as file_handle:
         os.fsync(file_handle.fileno())
 
 

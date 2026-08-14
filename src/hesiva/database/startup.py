@@ -15,7 +15,7 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy.engine import URL
 
-from hesiva.database.durability import sync_parent_directory
+from hesiva.database.durability import sync_file, sync_parent_directory
 from hesiva.database.semantic_validation import find_database_semantic_error
 from hesiva.models import model_metadata
 
@@ -335,8 +335,7 @@ def initialize_database_to_head(database_path: Path) -> DatabaseStatus:
                 "The newly migrated database did not pass schema verification."
             )
 
-        with temporary_path.open("rb") as temporary_file:
-            os.fsync(temporary_file.fileno())
+        sync_file(temporary_path)
         _publish_without_replacement(temporary_path, resolved_path)
         _sync_parent_directory(resolved_path)
         return status
